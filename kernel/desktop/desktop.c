@@ -315,7 +315,7 @@ int desktop_run(int mode) {
     de_console_log("Quark-OS v3.0 initialized");
     de_console_log("Ctrl+Alt+Left/Right switches workspaces");
 
-    de_wm_create(DE_ROLE_SETTINGS, "System Settings", 300, 100, 380, 440);
+    de_wm_create(DE_ROLE_SETTINGS, "System Settings", 220, 60, 380, 620);
 
     de_notify("Quark OS", "Welcome to the desktop");
 
