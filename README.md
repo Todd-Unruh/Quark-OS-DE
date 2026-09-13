@@ -20,7 +20,7 @@ and no host OS underneath — every subsystem is implemented in-tree.
   blitted per-region
 - **Two workspaces** — graphical desktop and fullscreen terminal,
   switchable with `Ctrl+Alt+Arrow`
-- **Shell** — ~70 builtin commands with pipes, redirection, env vars,
+- **Shell** — ~10 builtin commands with pipes, redirection, env vars,
   aliases, and history
 - **Forge** — a small interpreted scripting language built into the kernel
 - **RamFS** — flat filesystem with directories and file ops
