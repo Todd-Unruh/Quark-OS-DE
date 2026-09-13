@@ -1,0 +1,138 @@
+================================================================================
+                    QUARK-OS-3 — COMPLETE USAGE GUIDE
+================================================================================
+
+Quark-OS-3 is a 32-bit hobby operating system with a bash-style shell and
+built-in Forge_High language support. Write programs in .fg files and run them
+directly from the command prompt.
+
+--------------------------------------------------------------------------------
+1. BUILDING QUARK-OS-3 (on your Linux host)
+--------------------------------------------------------------------------------
+
+Requirements:
+  - gcc, nasm, ld (build-essential)
+  - grub-mkrescue (grub-pc-bin) for ISO creation
+  - qemu-system-i386 (optional, for testing)
+
+Commands:
+  cd Quark-OS-3
+  make clean
+  make              # builds quark_kernel.elf and quark_os_3.iso
+  make run          # boot in QEMU
+
+Verify multiboot:
+  make check-multiboot
+
+--------------------------------------------------------------------------------
+2. INSTALLING TO A COMPUTER / USB DRIVE
+--------------------------------------------------------------------------------
+
+From the Quark-OS-3 shell, type:
+  install
+
+This shows install steps. On the host:
+
+  sudo ./install.sh /dev/sdX
+
+Replace /dev/sdX with your USB device (e.g. /dev/sdb). WARNING: this erases
+the target device.
+
+Alternative: burn quark_os_3.iso to a USB with dd:
+  sudo dd if=quark_os_3.iso of=/dev/sdX bs=4M status=progress
+
+Boot the PC from the USB drive (enable legacy/BIOS boot if needed).
+
+--------------------------------------------------------------------------------
+3. FORGE_High — RUNNING PROGRAMS
+--------------------------------------------------------------------------------
+
+Syntax:
+  forge file.fg
+
+Example (pre-installed):
+  forge hello.fg
+
+Create your own program:
+  edit myprog.fg
+
+Sample myprog.fg:
+  print "My first Forge program on Quark-OS!"
+  set n = 5
+  repeat @n:
+      print "Hello!"
+  func double(x):
+      return x + x
+  set result = call double(21)
+  print "double(21) = (@result)"
+
+Supported Forge features in Quark-OS-3:
+  - print, set, const
+  - if / else (indented blocks)
+  - repeat N:, while, for (basic)
+  - func / call / return
+  - input "prompt" variable
+  - @variable interpolation in strings
+  - Basic arithmetic (+ - * /)
+
+File locations:
+  Programs live in the ramfs (in-memory filesystem). Use ls, edit, cat to manage
+  .fg files in the current directory.
+
+--------------------------------------------------------------------------------
+4. SHELL BASICS
+--------------------------------------------------------------------------------
+
+  help              List all commands
+  help forge        Help for forge command
+  ls                List files
+  cd docs           Change directory
+  cat hello.fg      View a file
+  edit myfile.fg    Simple text editor (^C to save)
+  clear             Clear screen
+  version           Show Quark-OS version
+  reboot / halt     Power control
+
+Chain commands with semicolon:
+  clear ; forge hello.fg
+
+Redirect output:
+  forge hello.fg > output.txt
+
+--------------------------------------------------------------------------------
+5. FORGE_LOW (KERNEL / BOOTLOADER — SEPARATE PROJECT)
+--------------------------------------------------------------------------------
+
+Forge_Low is the bare-metal sibling of Forge_High, located in ~/Forge_Low.
+Use it to write bootloaders and kernel code:
+
+  cd ~/Forge_Low
+  make test
+  make bootloader
+
+Bootloader sources use # bit 32 or # bit 64 on line 1.
+
+--------------------------------------------------------------------------------
+6. TROUBLESHOOTING
+--------------------------------------------------------------------------------
+
+  forge: file not found     Use ls to check filename; files are per-directory
+  Build fails               Ensure gcc-multilib and nasm are installed
+  ISO not created           Install grub-pc-bin / grub2-common
+  QEMU black screen         Try: qemu-system-i386 -cdrom quark_os_3.iso -serial stdio
+
+--------------------------------------------------------------------------------
+7. PROJECT STRUCTURE
+--------------------------------------------------------------------------------
+
+  Quark-OS-3/
+    kernel/           Kernel, shell, Forge interpreter
+    drivers/          Keyboard, terminal, timer, network
+    include/quark/    Headers
+    HOW_TO_USE.txt    This file
+    install.sh        USB install script
+    quark_os_3.iso    Bootable image (after make)
+
+================================================================================
+                              END OF GUIDE
+================================================================================
