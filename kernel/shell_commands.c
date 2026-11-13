@@ -4,7 +4,7 @@
  * ============================================================================= */
 
 #include <quark/shell.h>
-#include <quark/forge.h>
+#include <quark/de_apps.h>
 
 extern void shell_out(const char *str);
 extern void shell_outc(char c);
@@ -88,7 +88,7 @@ static int cmd_printf_cmd(int argc, char **argv) {
 
 static int cmd_pwd(int argc, char **argv) {
     (void)argc; (void)argv;
-    if (kstrcmp(ctx()->cwd, "root") == 0) {
+    if (kstrcmp(ctx()->cwd, "/") == 0) {
         shell_outln("/");
     } else {
         char path[64];
@@ -126,17 +126,17 @@ static int cmd_ls(int argc, char **argv) {
 
 static int cmd_cd(int argc, char **argv) {
     if (argc < 2) {
-        kstrcpy(ctx()->cwd, "root");
+        kstrcpy(ctx()->cwd, "/");
         shell_env_set("PWD", "/");
         return 0;
     }
-    if (kstrcmp(argv[1], "/") == 0 || kstrcmp(argv[1], "~") == 0) {
-        kstrcpy(ctx()->cwd, "root");
+    if (kstrcmp(argv[1], "/") == 0 || kstrcmp(argv[1], "~") == 0 || kstrcmp(argv[1], "root") == 0) {
+        kstrcpy(ctx()->cwd, "/");
         shell_env_set("PWD", "/");
         return 0;
     }
     if (kstrcmp(argv[1], "..") == 0) {
-        kstrcpy(ctx()->cwd, "root");
+        kstrcpy(ctx()->cwd, "/");
         shell_env_set("PWD", "/");
         return 0;
     }
@@ -819,14 +819,28 @@ static int cmd_net(int argc, char **argv) {
     return 0;
 }
 
+static int cmd_nslookup(int argc, char **argv) {
+    if (argc < 2) {
+        kprintf("usage: nslookup <hostname>\n");
+        return 1;
+    }
+
+    uint8_t address[4];
+    if (net_dns_lookup(argv[1], address) != 0) {
+        kprintf("nslookup: could not resolve %s\n", argv[1]);
+        return 1;
+    }
+
+    kprintf("%s -> %u.%u.%u.%u\n", argv[1],
+            address[0], address[1], address[2], address[3]);
+    return 0;
+}
+
 static int cmd_ping(int argc, char **argv) {
     (void)argc; (void)argv;
-    char dummy_packet[64];
-    kmemset(dummy_packet, 0xAB, sizeof(dummy_packet));
-    kprintf("PING: sending 64-byte test packet via e1000...\n");
-    e1000_send_packet(dummy_packet, 64);
-    kprintf("64 bytes transmitted.\n");
-    return 0;
+    kprintf("ping is not implemented yet; Quark currently handles received "
+            "ARP and IPv4 ICMP echo requests only.\n");
+    return 1;
 }
 
 /* --- Power --- */
@@ -939,26 +953,6 @@ static int cmd_source(int argc, char **argv) {
     return 0;
 }
 
-/* --- Forge_High scripting --- */
-
-static int cmd_forge(int argc, char **argv) {
-    if (argc < 2) {
-        kprintf("Usage: forge file.fg\n");
-        kprintf("Run a Forge_High program from the current directory.\n");
-        return 1;
-    }
-    ram_file_t *f = file_arg(argv[1]);
-    if (!f) {
-        kprintf("forge: %s: No such file\n", argv[1]);
-        return 1;
-    }
-    if (f->is_dir) {
-        kprintf("forge: %s: Is a directory\n", argv[1]);
-        return 1;
-    }
-    return forge_run_file(f);
-}
-
 static int cmd_install(int argc, char **argv) {
     (void)argc; (void)argv;
     shell_outln("Quark-OS-3 Installation");
@@ -1042,7 +1036,8 @@ static const shell_command_t command_table[] = {
     {"which",    cmd_which,     "which <cmd>        - Locate builtin command"},
     {"history",  cmd_history,   "history            - Command history"},
     {"net",      cmd_net,       "net                - Network interface status"},
-    {"ping",     cmd_ping,      "ping               - Send test packet"},
+    {"nslookup", cmd_nslookup,  "nslookup <host>    - Resolve a host using DNS"},
+    {"ping",     cmd_ping,      "ping               - Not implemented yet"},
     {"reboot",   cmd_reboot,    "reboot             - Reboot system"},
     {"halt",     cmd_halt,      "halt               - Halt CPU"},
     {"poweroff", cmd_poweroff,  "poweroff           - Power off (halt)"},
@@ -1052,8 +1047,7 @@ static const shell_command_t command_table[] = {
     {"rev",      cmd_rev,       "rev <string>       - Reverse text"},
     {"yes",      cmd_yes,       "yes [word]         - Repeated output"},
     {"logout",   cmd_logout,    "logout             - End session (halt)"},
-    {"source",   cmd_source,    "source <file>      - Execute shell script file"},
-    {"forge",    cmd_forge,     "forge <file.fg>    - Run Forge_High program"},
+    {"source",   cmd_source,    "source <file>      - Run commands from a shell script file"},
     {"install",  cmd_install,   "install            - Show install steps for Quark-OS-3"},
     {NULL, NULL, NULL}
 };
@@ -1078,7 +1072,7 @@ void shell_show_help(const char *topic) {
         return;
     }
 
-    kprintf("Quark-OS bash-style shell - %d built-in commands\n\n", 73);
+    kprintf("Quark-OS bash-style shell - %d built-in commands\n\n", 74);
     for (int i = 0; command_table[i].name; i++) {
         kprintf("  %s\n", command_table[i].help);
     }

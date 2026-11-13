@@ -5,14 +5,10 @@
 extern uint32_t timer_get_ticks(void);
 
 gui_config_t g_gui_config = {
-    .theme           = DE_THEME_DARK,
-    .wallpaper       = DE_WALL_FLOW,
-    .clock_pos       = DE_CLOCK_TR,
-    .clock_24h       = 1,
-    .clock_show_date = 1,
-    .clock_show_secs = 1,
-    .snap_enabled    = 1,
-    .show_icons      = 1,
+    .theme        = DE_THEME_DARK,
+    .wallpaper    = DE_WALL_DEFAULT,
+    .snap_enabled = 1,
+    .show_icons   = 0,
 };
 
 /* ---- Console ring buffer (still used by the workspace terminal) ------- */
@@ -79,11 +75,11 @@ static void icon_draw_one(int i) {
     icon_rect(i, &x, &y);
     int sel = (selected_icon == i);
     if (sel) {
-        de_fill_rounded(x - 4, y - 4, ICON_CELL_W - 8, ICON_CELL_H - 8,
-                        6, t->accent);
+        de_fill_rounded_alpha(x - 4, y - 4, ICON_CELL_W - 8, ICON_CELL_H - 8,
+                              6, t->accent, 70);
     }
     de_fill_rounded(x, y, ICON_SIZE, ICON_SIZE, 8, t->accent);
-    de_border(x, y, ICON_SIZE, ICON_SIZE, t->win_border);
+    de_border_rounded(x, y, ICON_SIZE, ICON_SIZE, 8, t->win_border);
     char letter[2] = { icons[i].label[0], 0 };
     de_text_centered(x + ICON_SIZE / 2 - 4, y + ICON_SIZE / 2 - 4,
                      letter, 0x00FFFFFF);
@@ -118,9 +114,8 @@ static void desktop_redraw_at_clip(de_rect_t* r) {
     de_wallpaper_erase_region(r->x, r->y, r->w, r->h);
     icons_draw_all();
     de_windows_draw_all();
-    de_clock_draw();
     de_panel_draw();
-    de_launcher_draw();
+    de_spotlight_draw();
     de_notify_draw();
     de_cursor_draw();
     de_clip_reset();
@@ -128,6 +123,18 @@ static void desktop_redraw_at_clip(de_rect_t* r) {
 
 /* ---- Key routing ------------------------------------------------------ */
 static void route_key(de_key_event_t* k) {
+    if (de_spotlight_is_open()) {
+        if (de_spotlight_handle_key(k)) {
+            de_mark_dirty();
+        }
+        return;
+    }
+
+    if (k->ctrl && !k->extended && k->ascii == ' ') {
+        de_spotlight_open();
+        return;
+    }
+
     if (de_workspace_handle_key(k)) {
         de_mark_dirty();
         return;
@@ -141,10 +148,42 @@ static void route_key(de_key_event_t* k) {
     }
     int fi = de_focus_get();
     if (fi < 0) return;
-    window_t* w = &g_windows[fi];
+    if (fi != 0) de_wm_raise(fi);
+    window_t* w = &g_windows[0];
     if (w->app && w->app->on_key) {
         w->app->on_key(w->app_state, w, k);
         de_wm_damage_window(w);
+    }
+}
+
+/* ---- Hover tracking --------------------------------------------------- */
+static void update_window_hover(void) {
+    for (int i = 0; i < DE_MAX_WINDOWS; i++) {
+        window_t* w = &g_windows[i];
+        if (!w->is_active || w->is_minimized) {
+            if (w->is_hovered) {
+                w->is_hovered = 0;
+                de_wm_damage_window(w);
+            }
+            continue;
+        }
+        uint8_t inside = (mouse_x >= w->x && mouse_x < w->x + w->width &&
+                          mouse_y >= w->y && mouse_y < w->y + w->height);
+        if (inside) {
+            for (int j = 0; j < i; j++) {
+                window_t* o = &g_windows[j];
+                if (!o->is_active || o->is_minimized) continue;
+                if (mouse_x >= o->x && mouse_x < o->x + o->width &&
+                    mouse_y >= o->y && mouse_y < o->y + o->height) {
+                    inside = 0;
+                    break;
+                }
+            }
+        }
+        if (w->is_hovered != inside) {
+            w->is_hovered = inside;
+            de_wm_damage_window(w);
+        }
     }
 }
 
@@ -153,7 +192,6 @@ static void process_desktop_events(void) {
     uint8_t clicked = (mouse_left_click && !prev_mouse_click);
 
     if (!mouse_left_click) {
-        if (de_clock_is_dragging()) de_clock_end_drag();
         for (int i = 0; i < DE_MAX_WINDOWS; i++) {
             if (g_windows[i].is_dragging) {
                 g_windows[i].is_dragging = 0;
@@ -165,10 +203,6 @@ static void process_desktop_events(void) {
     }
     prev_mouse_click = mouse_left_click;
 
-    if (de_clock_is_dragging()) {
-        de_clock_continue_drag(mouse_x, mouse_y);
-        return;
-    }
     for (int i = 0; i < DE_MAX_WINDOWS; i++) {
         window_t* w = &g_windows[i];
         if (!w->is_active) continue;
@@ -177,12 +211,12 @@ static void process_desktop_events(void) {
             w->x = mouse_x - w->drag_offset_x;
             w->y = mouse_y - w->drag_offset_y;
             de_wm_clamp(w);
-            de_damage_add(old_x - 4, old_y - 4,
-                          w->width + DE_SHADOW + 6,
-                          w->height + DE_SHADOW + 6);
-            de_damage_add(w->x - 4, w->y - 4,
-                          w->width + DE_SHADOW + 6,
-                          w->height + DE_SHADOW + 6);
+            de_damage_add(old_x - DE_SHADOW_BLUR, old_y - DE_SHADOW_BLUR,
+                          w->width  + DE_SHADOW_BLUR * 2,
+                          w->height + DE_SHADOW_BLUR * 2);
+            de_damage_add(w->x - DE_SHADOW_BLUR, w->y - DE_SHADOW_BLUR,
+                          w->width  + DE_SHADOW_BLUR * 2,
+                          w->height + DE_SHADOW_BLUR * 2);
             return;
         }
         if (w->is_resizing) {
@@ -197,34 +231,35 @@ static void process_desktop_events(void) {
             w->height = nh;
             int uw = (old_w > nw ? old_w : nw);
             int uh = (old_h > nh ? old_h : nh);
-            de_damage_add(w->x - 4, w->y - 4,
-                          uw + DE_SHADOW + 6,
-                          uh + DE_SHADOW + 6);
+            de_damage_add(w->x - DE_SHADOW_BLUR, w->y - DE_SHADOW_BLUR,
+                          uw + DE_SHADOW_BLUR * 2,
+                          uh + DE_SHADOW_BLUR * 2);
             return;
         }
     }
 
     if (!clicked) return;
 
-    if (de_launcher_is_open()) {
-        if (de_launcher_click(mouse_x, mouse_y)) return;
+    if (de_spotlight_is_open()) {
+        if (de_spotlight_click(mouse_x, mouse_y)) return;
     }
 
     if (de_panel_hit_any(mouse_x, mouse_y)) {
         if (de_panel_hit_launcher(mouse_x, mouse_y)) {
-            de_launcher_toggle();
+            de_spotlight_toggle();
             return;
         }
-        int idx;
-        if (de_panel_hit_task(mouse_x, mouse_y, &idx)) {
-            de_wm_restore_and_raise(idx);
+        int dock_idx;
+        if (de_panel_hit_task(mouse_x, mouse_y, &dock_idx)) {
+            int n_apps = app_registry_dock_count();
+            if (dock_idx == n_apps + 1) {
+                de_wm_create(DE_ROLE_SETTINGS, "System Settings", 220, 60, 380, 380);
+            } else {
+                const app_t* a = app_registry_dock_at(dock_idx - 1);
+                if (a) de_app_open(a->id);
+            }
             return;
         }
-        return;
-    }
-
-    if (de_clock_hit(mouse_x, mouse_y)) {
-        de_clock_begin_drag(mouse_x, mouse_y);
         return;
     }
 
@@ -235,29 +270,28 @@ static void process_desktop_events(void) {
                      mouse_y >= w->y && mouse_y < w->y + w->height;
         if (!inside) continue;
 
-        /* If it's not already on top, damage its old slot too. */
         if (i != 0) de_wm_damage_window(w);
 
         de_wm_raise(i);
-        w = &g_windows[0];
+        window_t* target = &g_windows[0];
 
-        if (de_wm_handle_resize(w, mouse_x, mouse_y)) return;
+        if (de_wm_handle_resize(target, mouse_x, mouse_y)) return;
 
-        if (mouse_y < w->y + DE_TITLEBAR_H) {
-            de_wm_handle_titlebar_click(w, mouse_x, mouse_y);
+        if (mouse_y < target->y + DE_TITLEBAR_H) {
+            de_wm_handle_titlebar_click(target, mouse_x, mouse_y);
             return;
         }
 
-        if (w->role == DE_ROLE_SETTINGS) {
-            if (de_settings_click(w, mouse_x, mouse_y)) {
-                de_wm_damage_window(w);
+        if (target->role == DE_ROLE_SETTINGS) {
+            if (de_settings_click(target, mouse_x, mouse_y)) {
+                de_wm_damage_window(target);
             }
             return;
         }
 
-        if (w->app && w->app->on_click) {
-            w->app->on_click(w->app_state, w, mouse_x, mouse_y);
-            de_wm_damage_window(w);
+        if (target->app && target->app->on_click) {
+            target->app->on_click(target->app_state, target, mouse_x, mouse_y);
+            de_wm_damage_window(target);
         }
         return;
     }
@@ -307,15 +341,13 @@ int desktop_run(int mode) {
     de_theme_apply(g_gui_config.theme);
     de_rtc_init();
     de_notify_init();
-    de_clock_init();
     de_wallpaper_init();
     de_input_init();
     de_workspace_init();
 
     de_console_log("Quark-OS v3.0 initialized");
     de_console_log("Ctrl+Alt+Left/Right switches workspaces");
-
-    de_wm_create(DE_ROLE_SETTINGS, "System Settings", 220, 60, 380, 620);
+    de_console_log("Ctrl+Space opens Spotlight");
 
     de_notify("Quark OS", "Welcome to the desktop");
 
@@ -325,12 +357,34 @@ int desktop_run(int mode) {
 
     uint32_t last_second = 0xFFFFFFFF;
     uint32_t last_cursor_blink = 0;
+    uint32_t last_tick = timer_get_ticks();
     int last_mx = -1, last_my = -1;
 
+    /* Track workspace transitions so we can install/remove the sink. */
+    int last_workspace = g_workspace;
+
     while (1) {
+        net_poll();
+        uint32_t now_tick = timer_get_ticks();
+        uint32_t tick_delta = now_tick - last_tick;
+        last_tick = now_tick;
+        float dt = (float)tick_delta * 0.01f;
+        if (dt > 0.1f) dt = 0.1f;
+
         de_key_event_t kev;
         while (de_input_pop(&kev)) route_key(&kev);
 
+        /* Workspace transition: install/remove the terminal sink. */
+        if (g_workspace != last_workspace) {
+            if (g_workspace == DE_WORKSPACE_TERMINAL) {
+                ws_terminal_init();
+            } else if (last_workspace == DE_WORKSPACE_TERMINAL) {
+                ws_terminal_shutdown();
+            }
+            last_workspace = g_workspace;
+        }
+
+        /* --- Terminal workspace ------------------------------------ */
         if (g_workspace == DE_WORKSPACE_TERMINAL) {
             if (mouse_x != last_mx || mouse_y != last_my) {
                 last_mx = mouse_x;
@@ -352,45 +406,83 @@ int desktop_run(int mode) {
             }
             de_damage_clear();
 
-            __asm__ volatile ("sti; hlt");
+            timer_idle_wait();
             continue;
         }
 
+        /* --- Desktop workspace ------------------------------------- */
         process_desktop_events();
+        update_window_hover();
+        de_wm_tick(dt);
 
+        for (int i = 0; i < DE_MAX_WINDOWS; i++) {
+            window_t* w = &g_windows[i];
+            if (!w->is_active || !w->app || !w->app->on_tick) continue;
+            if (w->app->on_tick(w->app_state, w, now_tick) &&
+                !w->is_minimized) {
+                de_wm_damage_window(w);
+            }
+        }
+
+        /* Advance the window-open animation. If a window is still
+         * opening, damage it so the animation is visible. */
+        for (int i = 0; i < DE_MAX_WINDOWS; i++) {
+            window_t* w = &g_windows[i];
+            if (!w->is_active) continue;
+            if (!de_anim_done(&w->anim_open)) {
+                de_wm_damage_window(w);
+            }
+        }
+
+        /* Mouse movement: damage the cursor's old and new cells,
+         * and the dock/menu bar strips when the cursor is near them. */
         if (mouse_x != last_mx || mouse_y != last_my) {
             if (last_mx >= 0) de_damage_add(last_mx, last_my, 18, 18);
             de_damage_add(mouse_x, mouse_y, 18, 18);
 
-            if (de_launcher_is_open()) {
+            int dock_zone_top = de_fb_h() - DE_DOCK_H - 24;
+            if (mouse_y >= dock_zone_top || last_my >= dock_zone_top) {
+                de_damage_add(0, de_fb_h() - DE_DOCK_H,
+                              de_fb_w(), DE_DOCK_H);
+            }
+
+            int bar_zone_bottom = DE_MENUBAR_H + 4;
+            if (mouse_y <= bar_zone_bottom || last_my <= bar_zone_bottom) {
+                de_damage_add(0, 0, de_fb_w(), DE_MENUBAR_H);
+            }
+
+            if (de_spotlight_is_open()) {
                 int lx, ly, lw, lh;
-                de_launcher_rect(&lx, &ly, &lw, &lh);
-                de_damage_add(lx - 4, ly - 4, lw + 8, lh + 8);
+                de_spotlight_rect(&lx, &ly, &lw, &lh);
+                de_damage_add(lx - 24, ly - 24, lw + 48, lh + 48);
             }
 
             last_mx = mouse_x;
             last_my = mouse_y;
         }
 
+        /* Second tick: menu-bar clock. */
         int h, m, s;
         de_now_hms(&h, &m, &s);
         uint32_t sec = (uint32_t)(h * 3600 + m * 60 + s);
         if (sec != last_second) {
-            int cx, cy, cw, ch;
-            de_clock_rect(&cx, &cy, &cw, &ch);
-            de_damage_add(cx, cy, cw, ch);
-            de_damage_add(0, de_panel_y(), de_fb_w(), DE_PANEL_H);
+            de_damage_add(0, 0, de_fb_w(), DE_MENUBAR_H);
             last_second = sec;
         }
 
+        /* Blink tick: redraw focused window's caret area and any open
+         * spotlight. */
         uint32_t tick = timer_get_ticks();
         if (tick - last_cursor_blink >= 25) {
             last_cursor_blink = tick;
-            for (int i = 0; i < DE_MAX_WINDOWS; i++) {
-                window_t* w = &g_windows[i];
-                if (w->is_active && !w->is_minimized && w->app) {
-                    de_wm_damage_window(w);
-                }
+            int fi = de_focus_get();
+            if (fi >= 0 && g_windows[fi].app) {
+                de_wm_damage_window(&g_windows[fi]);
+            }
+            if (de_spotlight_is_open()) {
+                int lx, ly, lw, lh;
+                de_spotlight_rect(&lx, &ly, &lw, &lh);
+                de_damage_add(lx - 24, ly - 24, lw + 48, lh + 48);
             }
         }
 
@@ -403,7 +495,7 @@ int desktop_run(int mode) {
         }
         de_damage_clear();
 
-        __asm__ volatile ("sti; hlt");
+        timer_idle_wait();
     }
 
     de_backbuffer_release();

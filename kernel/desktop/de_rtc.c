@@ -67,7 +67,7 @@ void de_format_clock(char* buf, int buflen) {
     int h, m, s;
     de_now_hms(&h, &m, &s);
     int i = 0;
-    if (g_gui_config.clock_24h) {
+    if (1) {   /* always 24-hour */ 
         buf[i++] = '0' + h / 10;
         buf[i++] = '0' + h % 10;
     } else {
@@ -80,7 +80,7 @@ void de_format_clock(char* buf, int buflen) {
     buf[i++] = ':';
     buf[i++] = '0' + m / 10;
     buf[i++] = '0' + m % 10;
-    if (g_gui_config.clock_show_secs) {
+    if (1) {   /* always show seconds */
         buf[i++] = ':';
         buf[i++] = '0' + s / 10;
         buf[i++] = '0' + s % 10;

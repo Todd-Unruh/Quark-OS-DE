@@ -137,3 +137,10 @@ char keyboard_getchar(void) {
     buf_head = (buf_head + 1) % KEY_BUFFER_SIZE;
     return c;
 }
+
+void keyboard_flush_input(void) {
+    uint32_t flags;
+    __asm__ volatile ("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
+    buf_head = buf_tail;
+    if (flags & 0x200u) __asm__ volatile ("sti" ::: "memory");
+}

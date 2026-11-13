@@ -15,22 +15,25 @@ static int cursor_x = 0;
 static int cursor_y = 0;
 static uint8_t current_color = 0x07;
 static int current_view_offset = 0;
+static void (*terminal_sink)(char c) = NULL;
 
-/* FIXED: Initializing with a literal string forces GCC to allocate a real multi-byte 
-   data segment in memory, meaning it compiles perfectly as a pointer (char*) address. */
 static char global_print_buffer[32] = {0};
+
+void terminal_set_sink(void (*sink)(char c)) {
+    terminal_sink = sink;
+}
 
 static void flush_view_to_hardware(void) {
     for (int y = 0; y < VGA_HEIGHT; y++) {
         int history_y = current_view_offset + y;
         volatile uint16_t *hardware_row = vga_hardware_buffer + (y * VGA_WIDTH);
         uint16_t *history_row = history_buffer[history_y];
-        
+
         for (int x = 0; x < VGA_WIDTH; x++) {
             hardware_row[x] = history_row[x];
         }
     }
-    
+
     int active_hardware_y = cursor_y - current_view_offset;
     if (active_hardware_y >= 0 && active_hardware_y < VGA_HEIGHT) {
         uint16_t pos = active_hardware_y * VGA_WIDTH + cursor_x;
@@ -73,21 +76,23 @@ void terminal_setcolor(uint8_t fg, uint8_t bg) {
 }
 
 void terminal_putchar(char c) {
+    if (terminal_sink) {
+        terminal_sink(c);
+    }
+
     int max_possible_offset = (cursor_y >= VGA_HEIGHT) ? (cursor_y - VGA_HEIGHT + 1) : 0;
     current_view_offset = max_possible_offset;
 
     if (c == '\n') {
         cursor_x = 0;
         cursor_y++;
-    } 
-    else if (c == '\b') {
+    } else if (c == '\b') {
         if (cursor_x > 0) {
             cursor_x--;
             uint16_t blank = (uint16_t)' ' | ((uint16_t)current_color << 8);
             history_buffer[cursor_y][cursor_x] = blank;
         }
-    } 
-    else {
+    } else {
         uint16_t raw_entry = (uint16_t)c | ((uint16_t)current_color << 8);
         history_buffer[cursor_y][cursor_x] = raw_entry;
         cursor_x++;
@@ -111,7 +116,7 @@ void terminal_putchar(char c) {
     } else {
         current_view_offset = 0;
     }
-    
+
     flush_view_to_hardware();
 }
 
@@ -161,7 +166,6 @@ void kprintf(const char *fmt, ...) {
                 }
                 case 'd': {
                     int n = va_arg(args, int);
-                    /* FIXED: Passes the string buffer parameter smoothly as an unadorned array pointer */
                     kitoa(n, global_print_buffer, 10);
                     terminal_write(global_print_buffer);
                     break;
@@ -197,4 +201,3 @@ void kprintf(const char *fmt, ...) {
     }
     va_end(args);
 }
-

@@ -29,6 +29,7 @@ EXCLUDES=(
     "./iso_root"
     "./node_modules"
     "./.cache"
+    "./tools/Sprites"
 )
 
 # --- File extensions we DO count (as code) ----------------------------------
@@ -61,6 +62,7 @@ find_args+=(
     ! -name "*.so"
     ! -name "*.d"
     ! -name "*.png"
+    ! -name "de_sprites.c"
     ! -name "*.jpg"
     ! -name "*.jpeg"
     ! -name "*.gif"

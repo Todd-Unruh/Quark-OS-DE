@@ -1,4 +1,3 @@
-
 /* =============================================================================
  * Quark-OS kernel/desktop/de_workspace.c
  * Two workspaces: a fullscreen terminal and the desktop environment.
@@ -21,7 +20,13 @@ void de_workspace_switch(int ws) {
     if (ws == g_workspace) return;
     g_workspace = ws;
 
-    /* Whole screen is invalid now. */
+    /* When returning to the desktop, make sure a valid window has focus
+     * so keystrokes land somewhere useful. */
+    if (ws == DE_WORKSPACE_DESKTOP) {
+        int fi = de_focus_get();
+        if (fi > 0) de_focus_set(fi);   /* only raise if not already 0 */
+    }
+
     de_damage_add_all();
     de_mark_dirty();
 }

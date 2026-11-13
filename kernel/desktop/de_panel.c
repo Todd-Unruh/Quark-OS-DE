@@ -1,101 +1,187 @@
 #include <quark/de.h>
 #include <quark/de_apps.h>
+#include <quark/de_image.h>
+#include <quark/de_sprites.h>
+#include <quark/de_font.h>
 
 extern uint32_t timer_get_ticks(void);
 
-static int panel_launcher_x(void) { return 8; }
-static int panel_task_x0(void)    { return 8 + DE_LAUNCHER_W + 8; }
-static int panel_tray_x0(void)    { return de_fb_w() - DE_TRAY_W - 8; }
+/* ------------------------------------------------------------------------- */
+/* Geometry                                                                   */
+/* ------------------------------------------------------------------------- */
 
-void de_panel_draw(void) {
+int de_panel_y(void) { return de_fb_h() - DE_MENUBAR_H; }
+
+static int dock_icon_size(void) { return 40; }
+static int dock_icon_gap(void)  { return 12; }
+static int dock_pad(void)       { return 20; }
+
+/* The dock is a floating strip centered at the bottom of the screen. */
+static int dock_top(void) { return de_fb_h() - DE_DOCK_H; }
+
+static int dock_count(void) {
+    return 2 + app_registry_dock_count();
+}
+
+static int dock_total_w(void) {
+    int n = dock_count();
+    int s = dock_icon_size();
+    int g = dock_icon_gap();
+    return dock_pad() * 2 + n * s + (n - 1) * g;
+}
+
+static int dock_x0(void) {
+    int w = dock_total_w();
+    int x = (de_fb_w() - w) / 2;
+    if (x < 8) x = 8;
+    return x;
+}
+
+static void dock_icon_rect(int i, int* out_x, int* out_y, int* out_w, int* out_h) {
+    int s = dock_icon_size();
+    int g = dock_icon_gap();
+    *out_x = dock_x0() + dock_pad() + i * (s + g);
+    *out_y = dock_top() + (DE_DOCK_H - s) / 2;
+    *out_w = s;
+    *out_h = s;
+}
+
+static const de_image_t* dock_sprite(int i) {
+    if (i == 0) return &img_launcher_icon;
+    int n = app_registry_dock_count();
+    if (i == n + 1) return &img_settings_icon;
+    const app_t* a = app_registry_dock_at(i - 1);
+    if (a && a->icon_image) return a->icon_image;
+    return NULL;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Menu bar (top)                                                             */
+/* ------------------------------------------------------------------------- */
+
+static void draw_menu_bar(void) {
     const de_theme_t* t = g_theme;
-    int py = de_panel_y();
+    int w = de_fb_w();
 
-    de_fill(0, py, de_fb_w(), DE_PANEL_H, t->panel);
-    de_hline(0, py, de_fb_w(), t->panel_edge);
+    de_fill_alpha(0, 0, w, DE_MENUBAR_H, t->panel, t->panel_alpha);
+    de_fill_alpha(0, DE_MENUBAR_H - 1, w, 1, 0x000000, 40);
 
-    {
-        int lx = panel_launcher_x();
-        int ly = py + 4;
-        int lw = DE_LAUNCHER_W - 8;
-        int lh = DE_PANEL_H - 8;
-        uint32_t bg = de_launcher_is_open() ? t->panel_sel : t->panel_btn;
-        uint32_t fg = de_launcher_is_open() ? t->panel_sel_txt : t->panel_txt;
-        de_fill_rounded(lx, ly, lw, lh, 6, bg);
-        de_text_centered(lx + lw / 2, ly + (lh - 8) / 2, "Q", fg);
-    }
+    /* Left: Q launcher icon at menu-bar scale, then "Quark-OS" text. */
+    int icon_h = DE_MENUBAR_H - 6;           /* 18 px */
+    int icon_w = icon_h;                     /* keep square */
+    int icon_y = (DE_MENUBAR_H - icon_h) / 2;
+    de_image_blit_scaled(&img_launcher_icon, 6, icon_y, icon_w, icon_h, 220);
 
-    {
-        int x = panel_task_x0();
-        int y = py + 4;
-        int h = DE_PANEL_H - 8;
-        for (int i = 0; i < DE_MAX_WINDOWS; i++) {
-            window_t* w = &g_windows[i];
-            if (!w->is_active) continue;
-            if (x + DE_TASK_BTN_W > panel_tray_x0()) break;
-            uint8_t sel = (i == 0) ? 1 : 0;
-            uint32_t bg = sel ? t->panel_sel : t->panel_btn;
-            uint32_t tx = sel ? t->panel_sel_txt : t->panel_txt;
-            de_fill_rounded(x, y, DE_TASK_BTN_W, h, 5, bg);
-            int iy = y + (h - 12) / 2;
-            de_fill(x + 8, iy, 12, 12, sel ? 0x00FFFFFF : t->accent);
-            de_border(x + 8, iy, 12, 12, t->panel_edge);
-            de_text_clipped(x + 26, y + (h - 8) / 2,
-                            w->title ? w->title : "",
-                            DE_TASK_BTN_W - 30, tx);
-            x += DE_TASK_BTN_W + 4;
+    int text_y = (DE_MENUBAR_H - de_font_body.ascent) / 2;
+    de_text(6 + icon_w + 6, text_y, "Quark-OS", t->panel_txt);
+
+    /* Right: clock. */
+    char buf[24];
+    de_format_clock(buf, sizeof(buf));
+    int tw = de_text_width(buf);
+    de_text(w - tw - 10, text_y, buf, t->panel_txt);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Dock (bottom, floating)                                                    */
+/* ------------------------------------------------------------------------- */
+
+static void draw_dock(void) {
+    const de_theme_t* t = g_theme;
+    int dt = dock_top();
+    int dx = dock_x0() - dock_pad() / 2;
+    int dw = dock_total_w();
+    int dh = DE_DOCK_H;
+
+    /* Rounded translucent background strip. */
+    de_fill_rounded_alpha(dx, dt, dw, dh, 20, t->panel, t->panel_alpha);
+    de_border_rounded(dx, dt, dw, dh, 20, t->widget_edge);
+
+    int n = dock_count();
+    for (int i = 0; i < n; i++) {
+        int ix, iy, iw, ih;
+        dock_icon_rect(i, &ix, &iy, &iw, &ih);
+
+        /* Magnification. */
+        float dxf = (float)(mouse_x - (ix + iw / 2));
+        float dyf = (float)(mouse_y - (iy + ih / 2));
+        float d2 = dxf * dxf + dyf * dyf;
+        int mag = 0;
+        if (d2 < 90.0f * 90.0f) {
+            float f = 1.0f - d2 / (90.0f * 90.0f);
+            mag = (int)(f * 8.0f);
         }
-    }
+        int ex = ix - mag / 2;
+        int ey = iy - mag;
+        int ew = iw + mag;
+        int eh = ih + mag;
 
-    {
-        int x0 = panel_tray_x0();
-        int ty = py + 4;
-        int th = DE_PANEL_H - 8;
-        de_fill_rounded(x0, ty, DE_TRAY_W, th, 5, t->panel_btn);
-        int ix = x0 + 10;
-        de_fill(ix,      ty + th / 2 - 1, 3, 6,  t->panel_txt);
-        de_fill(ix + 4,  ty + th / 2 - 3, 3, 8,  t->panel_txt);
-        de_fill(ix + 8,  ty + th / 2 - 5, 3, 10, t->panel_txt);
-        ix += 18;
-        de_fill(ix, ty + th / 2 - 3, 4, 6, t->panel_txt);
-        de_border(ix + 5, ty + th / 2 - 5, 4, 10, t->panel_txt);
-        ix += 18;
-        de_border(ix, ty + th / 2 - 4, 16, 8, t->panel_txt);
-        de_fill(ix + 2, ty + th / 2 - 2, 10, 4, t->panel_txt);
+        const de_image_t* sprite = dock_sprite(i);
+        if (sprite) {
+            de_image_blit_scaled(sprite, ex, ey, ew, eh, 255);
+        } else {
+            de_fill_rounded(ex, ey, ew, eh, 10, t->app_alt_bg);
+            de_border_rounded(ex, ey, ew, eh, 10, t->widget_edge);
+            const app_t* a = (i >= 1 && i <= app_registry_dock_count())
+                             ? app_registry_dock_at(i - 1) : NULL;
+            char c = (a && a->icon_char) ? a->icon_char[0] : '?';
+            char s[2] = { c, 0 };
+            int tw = de_text_width(s);
+            de_text(ex + (ew - tw) / 2,
+                    ey + (eh - de_font_body.ascent) / 2,
+                    s, t->accent);
+        }
 
-        char buf[24];
-        de_format_clock(buf, sizeof(buf));
-        int tw = de_text_width(buf);
-        de_text(x0 + DE_TRAY_W - tw - 10, ty + (th - 8) / 2,
-                buf, t->panel_txt);
+        /* Running-app dot. */
+        if (i >= 1 && i <= app_registry_dock_count()) {
+            const app_t* a = app_registry_dock_at(i - 1);
+            int running = 0;
+            for (int k = 0; k < DE_MAX_WINDOWS; k++) {
+                if (g_windows[k].is_active && g_windows[k].app == a) {
+                    running = 1; break;
+                }
+            }
+            if (running) {
+                de_fill_alpha(ix + iw / 2 - 2, dt + dh - 6,
+                              4, 4, 0x000000, 160);
+            }
+        }
     }
 }
 
+void de_panel_draw(void) {
+    draw_menu_bar();
+    draw_dock();
+}
+
+/* ------------------------------------------------------------------------- */
+/* Hit testing                                                                */
+/* ------------------------------------------------------------------------- */
+
 int de_panel_hit_any(int mx, int my) {
-    return my >= de_panel_y() && my < de_fb_h() && mx >= 0 && mx < de_fb_w();
+    (void)mx;
+    if (my < DE_MENUBAR_H) return 1;
+    if (my >= dock_top()) return 1;
+    return 0;
 }
 
 int de_panel_hit_launcher(int mx, int my) {
-    if (my < de_panel_y() + 4) return 0;
-    if (my >= de_panel_y() + DE_PANEL_H - 4) return 0;
-    int lx = panel_launcher_x();
-    return mx >= lx && mx < lx + DE_LAUNCHER_W;
+    if (my < dock_top()) return 0;
+    int ix, iy, iw, ih;
+    dock_icon_rect(0, &ix, &iy, &iw, &ih);
+    return mx >= ix && mx < ix + iw && my >= iy && my < iy + ih;
 }
 
 int de_panel_hit_task(int mx, int my, int* out_index) {
-    if (my < de_panel_y() + 4) return 0;
-    if (my >= de_panel_y() + DE_PANEL_H - 4) return 0;
-    if (mx < panel_task_x0()) return 0;
-    if (mx >= panel_tray_x0()) return 0;
-    int x = panel_task_x0();
-    for (int i = 0; i < DE_MAX_WINDOWS; i++) {
-        if (!g_windows[i].is_active) continue;
-        if (x + DE_TASK_BTN_W > panel_tray_x0()) break;
-        if (mx >= x && mx < x + DE_TASK_BTN_W) {
+    if (my < dock_top()) return 0;
+    int n = dock_count();
+    for (int i = 1; i < n; i++) {
+        int ix, iy, iw, ih;
+        dock_icon_rect(i, &ix, &iy, &iw, &ih);
+        if (mx >= ix && mx < ix + iw && my >= iy && my < iy + ih) {
             if (out_index) *out_index = i;
             return 1;
         }
-        x += DE_TASK_BTN_W + 4;
     }
     return 0;
 }

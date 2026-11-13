@@ -66,7 +66,7 @@ Sample myprog.fg:
   set result = call double(21)
   print "double(21) = (@result)"
 
-Supported Forge features in Quark-OS-3:
+Supported Forge features:
   - print, set, const
   - if / else (indented blocks)
   - repeat N:, while, for (basic)
@@ -80,7 +80,55 @@ File locations:
   .fg files in the current directory.
 
 --------------------------------------------------------------------------------
-4. SHELL BASICS
+4. MAKING DESKTOP APPS WITH FORGE
+--------------------------------------------------------------------------------
+
+Forge scripts can also be desktop apps. Create a .fg file with a window
+declaration, a draw() function, and optional functions used by widgets:
+
+  window "Counter" 360 220
+  set count = 0
+
+  func draw():
+      panel 16 16 312 112 "#252a32"
+      label 32 28 "Forge counter" "#ffffff"
+      text 32 58 "Count: @count" "#d8e0ea"
+      button 32 88 120 30 "Add one" increment
+      checkbox 180 94 "Enabled" enabled toggle_enabled
+
+  func increment():
+      set count = count + 1
+
+  func toggle_enabled():
+      print "Enabled is now @enabled"
+
+Drawing coordinates are relative to the window's content area:
+
+  fill x y width height "#RRGGBB"       Filled rectangle
+  rect x y width height "#RRGGBB"       Rectangle outline
+  panel x y width height "#RRGGBB"      Rounded panel with themed border
+  line x1 y1 x2 y2 "#RRGGBB"            Line
+  circle center_x center_y radius "#RRGGBB"
+  text x y "Text" "#RRGGBB"             Text (the color is optional)
+  label x y "Text" "#RRGGBB"            Alias for text
+  button x y width height "Text" action Clickable button
+  checkbox x y "Text" variable action   Clickable checkbox
+
+Checkboxes toggle their named Forge variable between 0 and 1, then call their
+action function. Button and checkbox actions are Forge functions with no
+parameters. Values and drawing commands in draw() are refreshed after clicks.
+
+In the desktop Files app, select a .fg file and press G to run it. A file with
+both a window declaration and draw() opens as a window; a regular Forge script
+runs and displays its output. Double-clicking opens the file in the editor;
+Forge files only run with G. Forge app windows use the normal title bar,
+including close, minimize, maximize, and drag controls.
+
+The Files app includes widgets.fg, a preloaded demo showing drawing commands,
+text, buttons, and checkboxes. Select it and press G to try it.
+
+--------------------------------------------------------------------------------
+5. SHELL BASICS
 --------------------------------------------------------------------------------
 
   help              List all commands
@@ -100,7 +148,7 @@ Redirect output:
   forge hello.fg > output.txt
 
 --------------------------------------------------------------------------------
-5. FORGE_LOW (KERNEL / BOOTLOADER — SEPARATE PROJECT)
+6. FORGE_LOW (KERNEL / BOOTLOADER — SEPARATE PROJECT)
 --------------------------------------------------------------------------------
 
 Forge_Low is the bare-metal sibling of Forge_High, located in ~/Forge_Low.
@@ -113,7 +161,7 @@ Use it to write bootloaders and kernel code:
 Bootloader sources use # bit 32 or # bit 64 on line 1.
 
 --------------------------------------------------------------------------------
-6. TROUBLESHOOTING
+7. TROUBLESHOOTING
 --------------------------------------------------------------------------------
 
   forge: file not found     Use ls to check filename; files are per-directory
@@ -122,7 +170,7 @@ Bootloader sources use # bit 32 or # bit 64 on line 1.
   QEMU black screen         Try: qemu-system-i386 -cdrom quark_os_3.iso -serial stdio
 
 --------------------------------------------------------------------------------
-7. PROJECT STRUCTURE
+8. PROJECT STRUCTURE
 --------------------------------------------------------------------------------
 
   Quark-OS-3/

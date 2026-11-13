@@ -25,6 +25,8 @@ typedef struct block_header {
 #define HEADER_SIZE  ((size_t)sizeof(block_header_t))
 #define MIN_SPLIT    (HEADER_SIZE + HEAP_ALIGN)
 
+extern uint8_t __kernel_end[];
+
 static block_header_t *heap_head = NULL;
 
 /* -------------------------------------------------------------------------- */
@@ -34,6 +36,18 @@ static inline size_t align_up(size_t v, size_t a) {
 
 /* -------------------------------------------------------------------------- */
 void heap_init(void) {
+    /* Safety: refuse to init if the heap overlaps the kernel image.
+     * Without this, a kernel that grows past KERNEL_HEAP_START will
+     * silently corrupt itself and triple-fault. */
+    uint32_t kend = (uint32_t)(uintptr_t)__kernel_end;
+    if (kend >= HEAP_START) {
+        kprintf("  [HEAP] FATAL: kernel_end 0x%x >= HEAP_START 0x%x\n",
+                kend, HEAP_START);
+        kprintf("  [HEAP] Move KERNEL_HEAP_START higher in kernel.h\n");
+        heap_head = NULL;
+        return;
+    }
+
     if (HEAP_END <= HEAP_START + HEADER_SIZE) {
         kprintf("  [HEAP] FATAL: heap region too small\n");
         heap_head = NULL;

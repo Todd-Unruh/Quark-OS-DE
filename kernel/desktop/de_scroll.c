@@ -24,6 +24,7 @@ int de_scroll_wheel(de_scroll_t* s, int dy) {
 
 void de_scroll_draw(window_t* w, de_scroll_t* s,
                     int vx, int vy, int vw, int vh) {
+    (void)w;
     if (!s) return;
     const de_theme_t* t = g_theme;
 

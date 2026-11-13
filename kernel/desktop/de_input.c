@@ -50,6 +50,13 @@ int de_input_pending(void) {
     return q_head != q_tail;
 }
 
+void de_input_clear(void) {
+    uint32_t flags;
+    __asm__ volatile ("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
+    q_tail = q_head;
+    if (flags & 0x200u) __asm__ volatile ("sti" ::: "memory");
+}
+
 int de_input_pop(de_key_event_t* out) {
     if (q_head == q_tail) return 0;
     *out = queue[q_tail];

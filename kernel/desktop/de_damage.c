@@ -9,6 +9,7 @@
 /* ---- Damage list ------------------------------------------------------- */
 static de_rect_t damage[DE_MAX_DAMAGE];
 static int       damage_count = 0;
+static int       iter_index = 0;
 
 /* ---- Clip rect --------------------------------------------------------- */
 static int clip_x = 0, clip_y = 0;
@@ -34,12 +35,14 @@ int  de_clip_is_active(void) { return clip_active; }
 /* ---- Damage list management ------------------------------------------- */
 void de_damage_clear(void) {
     damage_count = 0;
+    iter_index = 0;
 }
 
 int de_damage_count(void) { return damage_count; }
 
 void de_damage_add_all(void) {
     damage_count = 0;
+    iter_index = 0;
     damage[damage_count].x = 0;
     damage[damage_count].y = 0;
     damage[damage_count].w = de_fb_w();
@@ -62,7 +65,8 @@ void de_damage_add(int x, int y, int w, int h) {
         de_rect_t* r = &damage[i];
         int rx1 = r->x + r->w, ry1 = r->y + r->h;
         int nx1 = x + w, ny1 = y + h;
-        int overlaps = !(nx1 <= r->x || x >= rx1 || ny1 <= r->y || y >= ry1);
+        /* Coalesce if rects touch or overlap (adjacency counts). */
+        int overlaps = !(nx1 < r->x || x > rx1 || ny1 < r->y || y > ry1);
 
         if (overlaps) {
             /* Union */
@@ -92,8 +96,6 @@ void de_damage_add(int x, int y, int w, int h) {
 }
 
 /* Iterate all rects. Call de_damage_clear() when done. */
-static int iter_index = 0;
-
 int de_damage_next(de_rect_t* out_rect) {
     if (iter_index >= damage_count) {
         iter_index = 0;

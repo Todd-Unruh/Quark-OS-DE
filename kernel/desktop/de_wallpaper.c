@@ -1,11 +1,12 @@
 /* =============================================================================
  * Quark-OS kernel/desktop/de_wallpaper.c
- * KDE Plasma "Flow" wallpaper with a cached render buffer.
- * Damage-tracked: samples from cache per region instead of redrawing the
- * whole screen every frame.
+ * Baked-sprite wallpapers with a cached render buffer.
+ * Falls back to procedural patterns if a sprite is missing.
  * ============================================================================= */
 
 #include <quark/de.h>
+#include <quark/de_image.h>
+#include <quark/de_sprites.h>
 
 extern uint32_t* de_bb_ptr(void);
 extern int       de_bb_w(void);
@@ -58,6 +59,29 @@ static uint32_t flow_palette(int t) {
     return de_blend(stops[seg], stops[seg + 1], f);
 }
 
+/* --------------------------------------------------------------------------- */
+/* Sprite-based wallpaper: scale the baked image to fit the cache buffer.      */
+/* --------------------------------------------------------------------------- */
+static void render_sprite(const de_image_t* img) {
+    if (!img || !img->pixels) return;
+    if (img->w <= 0 || img->h <= 0) return;
+
+    for (int y = 0; y < cache_h; y++) {
+        int sy = y * img->h / cache_h;
+        if (sy >= img->h) sy = img->h - 1;
+        const uint32_t* src = img->pixels + (uint32_t)sy * img->w;
+        uint32_t* dst = cache + (uint32_t)y * cache_w;
+        for (int x = 0; x < cache_w; x++) {
+            int sx = x * img->w / cache_w;
+            if (sx >= img->w) sx = img->w - 1;
+            dst[x] = src[sx] & 0x00FFFFFF;   /* force opaque */
+        }
+    }
+}
+
+/* --------------------------------------------------------------------------- */
+/* Procedural fallbacks (kept for if a sprite is missing)                      */
+/* --------------------------------------------------------------------------- */
 static void render_flow(int w, int h) {
     for (int y = 0; y < h; y++) {
         uint32_t* row = cache + (uint32_t)y * w;
@@ -72,17 +96,6 @@ static void render_flow(int w, int h) {
             if (idx < 0) idx = 0;
             if (idx > 1023) idx = 1023;
             row[x] = flow_palette(idx);
-        }
-    }
-    for (int y = 0; y < h; y += 2) {
-        uint32_t* row = cache + (uint32_t)y * w;
-        for (int x = 0; x < w; x++) {
-            uint32_t c = row[x];
-            uint32_t r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
-            r = (r + 12 > 255) ? 255 : r + 12;
-            g = (g + 12 > 255) ? 255 : g + 12;
-            b = (b + 12 > 255) ? 255 : b + 12;
-            row[x] = (r << 16) | (g << 8) | b;
         }
     }
 }
@@ -113,21 +126,38 @@ static void render_solid(int w, int h, uint32_t color) {
 }
 
 /* --------------------------------------------------------------------------- */
-/* Ensure the cache is up to date for the current wallpaper id.                */
+/* Pick the right wallpaper for the current config and render it.              */
 /* --------------------------------------------------------------------------- */
+static void render_current(void) {
+    switch (g_gui_config.wallpaper) {
+        case DE_WALL_DEFAULT:
+            render_sprite(&img_wallpaper_default);
+            break;
+        case DE_WALL_MIDNIGHT:
+            render_sprite(&img_wallpaper_midnight);
+            break;
+        case DE_WALL_PLASMA_SUNSET:
+            render_sprite(&img_wallpaper_plasma_sunset);
+            break;
+
+        /* Procedural fallbacks */
+        case DE_WALL_FLOW:    render_flow(cache_w, cache_h);            break;
+        case DE_WALL_DARK:    render_dark_gradient(cache_w, cache_h);   break;
+        case DE_WALL_LIGHT:   render_light_gradient(cache_w, cache_h);  break;
+        case DE_WALL_SOLID_A: render_solid(cache_w, cache_h, 0x00254A80); break;
+        case DE_WALL_SOLID_B: render_solid(cache_w, cache_h, 0x001C2A3A); break;
+
+        default:
+            render_sprite(&img_wallpaper_default);
+            break;
+    }
+}
+
 static void ensure_cache(void) {
     if (!cache) return;
     if (cache_wall_id == (uint32_t)g_gui_config.wallpaper) return;
-
     cache_wall_id = (uint32_t)g_gui_config.wallpaper;
-    switch (g_gui_config.wallpaper) {
-        case DE_WALL_FLOW:    render_flow(cache_w, cache_h);          break;
-        case DE_WALL_DARK:    render_dark_gradient(cache_w, cache_h); break;
-        case DE_WALL_LIGHT:   render_light_gradient(cache_w, cache_h);break;
-        case DE_WALL_SOLID_A: render_solid(cache_w, cache_h, 0x00254A80); break;
-        case DE_WALL_SOLID_B: render_solid(cache_w, cache_h, 0x001C2A3A); break;
-        default:              render_flow(cache_w, cache_h);          break;
-    }
+    render_current();
 }
 
 /* --------------------------------------------------------------------------- */
@@ -142,7 +172,8 @@ void de_wallpaper_init(void) {
     if (cache_w <= 0 || cache_h <= 0) return;
 
     if (!cache) {
-        uint32_t bytes = (uint32_t)cache_w * (uint32_t)cache_h * sizeof(uint32_t);
+        uint32_t bytes = (uint32_t)cache_w * (uint32_t)cache_h
+                       * sizeof(uint32_t);
         cache = (uint32_t*)kmalloc(bytes);
         if (!cache) {
             kprintf("[DE] WARN: wallpaper cache alloc failed\n");
@@ -154,7 +185,6 @@ void de_wallpaper_init(void) {
     de_wallpaper_invalidate();
 }
 
-/* Full-screen blit. Kept for compatibility with old code paths. */
 void de_wallpaper_draw(void) {
     ensure_cache();
     uint32_t* dst = de_bb_ptr();
@@ -170,7 +200,6 @@ void de_wallpaper_draw(void) {
     }
 }
 
-/* Region blit, used by the damage-based compositor. */
 void de_wallpaper_erase_region(int x, int y, int w, int h) {
     ensure_cache();
 

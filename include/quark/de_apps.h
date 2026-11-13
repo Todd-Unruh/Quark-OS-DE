@@ -3,6 +3,7 @@
 
 #include <quark/de.h>
 #include <quark/kernel.h>
+#include <quark/de_image.h>
 
 /* Forward decls */
 struct window_s;
@@ -34,24 +35,31 @@ typedef struct de_key_event_s {
 #define DE_KEY_TAB     12
 
 /* Every app implements this. All callbacks except on_draw are optional. */
+#include <quark/de_image.h>
+
 typedef struct app_s {
-    const char* id;         /* unique, e.g. "editor" */
-    const char* name;       /* display, e.g. "Text Editor" */
-    const char* icon_char;  /* single char for launcher / panel icon */
+    const char* id;
+    const char* name;
+    const char* icon_char;
+    const de_image_t* icon_image;      /* NEW: optional sprite */
+    uint8_t hide_from_dock;
     int default_w, default_h;
 
-    void* (*on_open)(void);                          /* allocate state */
-    void  (*on_close)(void* st);                     /* free state */
+    void* (*on_open)(void);
+    void  (*on_close)(void* st);
     void  (*on_draw)(void* st, window_t* w);
     void  (*on_click)(void* st, window_t* w, int mx, int my);
     void  (*on_key)(void* st, window_t* w, de_key_event_t* k);
     void  (*on_scroll)(void* st, window_t* w, int dy);
+    int   (*on_tick)(void* st, window_t* w, uint32_t now);
 } app_t;
 
 /* Registry */
 const app_t* app_registry_find(const char* id);
 const app_t* app_registry_at(int index);   /* NULL when out of range */
 int          app_registry_count(void);
+const app_t* app_registry_dock_at(int index);
+int          app_registry_dock_count(void);
 
 /* Helper to open an app by id; returns window index or -1. */
 int de_app_open(const char* id);
@@ -76,6 +84,7 @@ void de_scroll_clamp(de_scroll_t* s);
 
 /* Input queue (implemented in de_input.c). */
 void de_input_init(void);
+void de_input_clear(void);
 void de_input_push_scancode(uint8_t sc);
 int  de_input_pop(de_key_event_t* out);
 int  de_input_pending(void);

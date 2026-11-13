@@ -5,6 +5,7 @@
  * ============================================================================= */
 
 #include <quark/kernel.h>
+#include <quark/shell.h>
 
 /* --------------------------------------------------------------------------
  * Boot banner (text mode only)
@@ -118,15 +119,19 @@ void kernel_main(uint32_t mb_magic, multiboot_info_t *mb_info) {
     ramfs_init();
     boot_ok("Virtual RamFS file allocation tables mounted");
 
+    shell_init_context();
+
     syscall_init();
     boot_ok("Syscall table installed (INT 0x80)");
 
     pci_init();
-    boot_ok("PCI bus scanned (e1000 if present)");
+    boot_ok("PCI bus scanned (e1000 / VIA Rhine if present)");
 
     /* --- Interrupts on --- */
     sti();
     boot_ok("Interrupts enabled");
+
+    net_dhcp_start();
 
     if (!have_fb) {
         terminal_setcolor(VGA_DARK_GREY, VGA_BLACK);

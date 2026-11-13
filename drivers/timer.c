@@ -11,11 +11,17 @@
 #define PIT_BASE_FREQ   1193180 /* PIT input frequency Hz  */
 
 static volatile uint32_t tick_count = 0;
+static volatile uint32_t idle_tick_count = 0;
+static volatile uint8_t idle_waiting = 0;
 
 /* IRQ0 handler: increment tick and trigger scheduler */
 static void timer_irq_handler(registers_t *regs) {
     (void)regs;
     tick_count++;
+    if (idle_waiting) {
+        idle_tick_count++;
+        idle_waiting = 0;
+    }
     /* Every tick: give scheduler a chance to switch processes */
     schedule();
 }
@@ -37,6 +43,24 @@ void timer_init(uint32_t hz) {
 
 uint32_t timer_get_ticks(void) {
     return tick_count;
+}
+
+uint32_t timer_get_idle_ticks(void) {
+    return idle_tick_count;
+}
+
+void timer_idle_wait(void) {
+    uint32_t flags;
+    __asm__ volatile ("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
+    idle_waiting = 1;
+    if (flags & 0x200u) {
+        __asm__ volatile ("sti; hlt" ::: "memory");
+    } else {
+        __asm__ volatile ("hlt" ::: "memory");
+    }
+    __asm__ volatile ("cli" ::: "memory");
+    idle_waiting = 0;
+    if (flags & 0x200u) __asm__ volatile ("sti" ::: "memory");
 }
 
 /* Busy-wait sleep using tick counter (100 Hz = 10 ms per tick) */

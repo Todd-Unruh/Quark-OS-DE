@@ -4,6 +4,7 @@
  * ============================================================================= */
 
 #include <quark/de_apps.h>
+#include <quark/de_sprites.h>
 
 typedef struct { int unused; } about_state_t;
 
@@ -27,7 +28,7 @@ static void about_draw(void* st, window_t* w) {
     de_border(cx, cy, cw, ch, t->win_border);
 
     const char* lines[] = {
-        "Quark-OS v3.0",
+        "Quark-OS v5.0",
         "32-bit protected mode",
         "",
         "Kernel:  monolithic i386",
@@ -35,7 +36,7 @@ static void about_draw(void* st, window_t* w) {
         "Input:   PS/2 kbd + mouse",
         "FS:      RamFS",
         "",
-        "(c) 2024, Quark Project",
+        "(c) 2026, Quark Project",
     };
     int count = (int)(sizeof(lines) / sizeof(lines[0]));
     int y = cy + (ch - count * 16) / 2;
@@ -51,6 +52,7 @@ const app_t app_about = {
     .id = "about",
     .name = "About Quark",
     .icon_char = "i",
+    .icon_image = &img_about_icon,
     .default_w = 260,
     .default_h = 260,
     .on_open = about_open,

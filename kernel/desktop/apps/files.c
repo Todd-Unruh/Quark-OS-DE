@@ -6,11 +6,14 @@
 
 #include <quark/de_apps.h>
 #include <quark/forge.h>
+#include <quark/de_sprites.h>
+#include <quark/de_font.h>
 
 #define FILES_ROW_H     18
 #define FILES_MAX_ENT   64
 #define FILES_NAME_MAX  32
 #define INPUT_MAX       48
+#define FORGE_OUTPUT_LINE 256
 
 /* --------------------------------------------------------------------------- */
 /* State                                                                       */
@@ -27,7 +30,8 @@ typedef enum {
     MODAL_NEW_FOLDER,
     MODAL_RENAME,
     MODAL_CONFIRM_DELETE,
-    MODAL_MESSAGE
+    MODAL_MESSAGE,
+    MODAL_FORGE_OUTPUT
 } modal_kind_t;
 
 typedef struct {
@@ -37,30 +41,31 @@ typedef struct {
 
     file_entry_t entries[FILES_MAX_ENT];
 
-    char cwd[FILES_NAME_MAX];   /* "/" or "subdir" (single level) */
+    char cwd[FILES_NAME_MAX];
 
-    /* Modal state */
     modal_kind_t modal;
     char  input[INPUT_MAX];
     int   input_len;
     char  prompt[64];
-    char  target_name[FILES_NAME_MAX];   /* for rename / delete */
+    char  target_name[FILES_NAME_MAX];
+    char  forge_output[1024];
+    int   forge_output_len;
+    int   forge_output_scroll;
 } files_state_t;
 
 extern void editor_preload(const char* name);
+extern uint32_t timer_get_ticks(void);
 
 /* --------------------------------------------------------------------------- */
 /* Refresh                                                                     */
 /* --------------------------------------------------------------------------- */
 
-/* Compare: dirs sort before files; within a type, alphabetical. */
 static int entry_cmp(const file_entry_t* a, const file_entry_t* b) {
     if (a->is_dir != b->is_dir) return a->is_dir ? -1 : 1;
     return kstrcmp(a->name, b->name);
 }
 
 static void refresh(files_state_t* s) {
-    /* Preserve selection by name if possible. */
     char keep_name[FILES_NAME_MAX];
     int  have_keep = 0;
     if (s->selected >= 0 && s->selected < s->count) {
@@ -70,7 +75,6 @@ static void refresh(files_state_t* s) {
 
     s->count = 0;
 
-    /* Read every child of cwd. */
     for (int i = 0; i < MAX_FILES && s->count < FILES_MAX_ENT; i++) {
         ram_file_t* f = ramfs_get_child(s->cwd, i);
         if (!f) break;
@@ -85,7 +89,6 @@ static void refresh(files_state_t* s) {
         s->count++;
     }
 
-    /* Sort: dirs first, then alphabetical. Insertion sort — small arrays. */
     for (int i = 1; i < s->count; i++) {
         file_entry_t key = s->entries[i];
         int j = i - 1;
@@ -96,7 +99,6 @@ static void refresh(files_state_t* s) {
         s->entries[j + 1] = key;
     }
 
-    /* Restore selection. */
     s->selected = -1;
     if (have_keep) {
         for (int i = 0; i < s->count; i++) {
@@ -133,6 +135,12 @@ static int selected_is_valid(files_state_t* s) {
     return s->selected >= 0 && s->selected < s->count;
 }
 
+static int is_forge_file(const char* name) {
+    int len = (int)kstrlen(name);
+    return len >= 3 && name[len - 3] == '.' &&
+           name[len - 2] == 'f' && name[len - 1] == 'g';
+}
+
 static void begin_modal(files_state_t* s, modal_kind_t kind,
                         const char* prompt, const char* initial) {
     s->modal = kind;
@@ -166,9 +174,6 @@ static void action_open(files_state_t* s) {
     file_entry_t* e = &s->entries[s->selected];
 
     if (e->is_dir) {
-        /* Enter the directory. We use a flat cwd model: the subdir name
-         * becomes the new cwd, and ".." takes us back to "/". This only
-         * supports one nesting level, which matches the rest of the OS. */
         kstrcpy(s->cwd, e->name);
         s->selected = -1;
         s->scroll_y = 0;
@@ -176,7 +181,6 @@ static void action_open(files_state_t* s) {
         return;
     }
 
-    /* Open file in editor. */
     editor_preload(e->name);
     de_app_open("editor");
 }
@@ -189,17 +193,24 @@ static void action_edit(files_state_t* s) {
     de_app_open("editor");
 }
 
+static void files_forge_output(void* context, char character) {
+    files_state_t* s = (files_state_t*)context;
+    if (!s || s->forge_output_len >= (int)sizeof(s->forge_output) - 1)
+        return;
+    s->forge_output[s->forge_output_len++] = character;
+    s->forge_output[s->forge_output_len] = '\0';
+}
+
+static void files_forge_output_text(files_state_t* s, const char* text) {
+    while (*text) files_forge_output(s, *text++);
+}
+
 static void action_forge(files_state_t* s) {
     if (!selected_is_valid(s)) return;
     file_entry_t* e = &s->entries[s->selected];
     if (e->is_dir) return;
 
-    /* Check .fg extension. */
-    int len = (int)kstrlen(e->name);
-    if (len < 3 ||
-        e->name[len - 3] != '.' ||
-        e->name[len - 2] != 'f' ||
-        e->name[len - 1] != 'g') {
+    if (!is_forge_file(e->name)) {
         begin_modal(s, MODAL_MESSAGE, "Not a .fg file", NULL);
         return;
     }
@@ -210,35 +221,23 @@ static void action_forge(files_state_t* s) {
         return;
     }
 
-    /* Log start + end to the shared console so the user can find the output
-     * in the terminal workspace. */
-    char line[64];
-    int p = 0;
-    const char* pre = "forge: ";
-    while (*pre && p < 60) line[p++] = *pre++;
-    int q = 0;
-    while (e->name[q] && p < 62) line[p++] = e->name[q++];
-    line[p] = '\0';
-    de_console_log(line);
+    if (forge_is_ui_file(f)) {
+        if (forge_ui_launch(f) != 0)
+            begin_modal(s, MODAL_MESSAGE, "Forge app could not be opened", NULL);
+        return;
+    }
 
+    s->forge_output_len = 0;
+    s->forge_output_scroll = 0;
+    s->forge_output[0] = '\0';
+    forge_set_output(files_forge_output, s);
     int rc = forge_run_file(f);
-
-    char done[48];
-    p = 0;
-    const char* pre2 = "forge: exit ";
-    while (*pre2 && p < 40) done[p++] = *pre2++;
-    char num[8]; int n = 0;
-    char tmp[8]; int m = 0;
-    if (rc == 0) tmp[m++] = '0';
-    while (rc > 0) { tmp[m++] = '0' + rc % 10; rc /= 10; }
-    while (m > 0) num[n++] = tmp[--m];
-    num[n] = '\0';
-    q = 0;
-    while (num[q] && p < 46) done[p++] = num[q++];
-    done[p] = '\0';
-    de_console_log(done);
-
-    begin_modal(s, MODAL_MESSAGE, "Forge output in terminal", NULL);
+    forge_set_output(NULL, NULL);
+    if (rc == 0)
+        files_forge_output_text(s, "\n[Program finished successfully]");
+    else
+        files_forge_output_text(s, "\n[Program failed]");
+    begin_modal(s, MODAL_FORGE_OUTPUT, "Forge output", NULL);
 }
 
 static void action_delete(files_state_t* s) {
@@ -254,8 +253,17 @@ static int modal_handle_key(files_state_t* s, de_key_event_t* k) {
     if (s->modal == MODAL_NONE) return 0;
 
     if (s->modal == MODAL_MESSAGE) {
-        /* Any key dismisses. */
         end_modal(s);
+        return 1;
+    }
+
+    if (s->modal == MODAL_FORGE_OUTPUT) {
+        if (k->keycode == DE_KEY_UP && s->forge_output_scroll < 1000)
+            s->forge_output_scroll++;
+        else if (k->keycode == DE_KEY_DOWN && s->forge_output_scroll > 0)
+            s->forge_output_scroll--;
+        else if (k->ascii == '\n' || k->ascii == 27)
+            end_modal(s);
         return 1;
     }
 
@@ -269,15 +277,14 @@ static int modal_handle_key(files_state_t* s, de_key_event_t* k) {
             return 1;
         }
         if (k->ascii == 'n' || k->ascii == 'N' ||
-            k->ascii == '\n' || k->ascii == 27 /*esc*/) {
+            k->ascii == '\n' || k->ascii == 27) {
             end_modal(s);
             return 1;
         }
         return 1;
     }
 
-    /* Text-input modals */
-    if (k->ascii == 27) {           /* escape */
+    if (k->ascii == 27) {
         end_modal(s);
         return 1;
     }
@@ -318,7 +325,6 @@ static void files_key(void* st, window_t* w, de_key_event_t* k) {
     files_state_t* s = (files_state_t*)st;
     if (!s || !k) return;
 
-    /* Modal swallows all keys. */
     if (modal_handle_key(s, k)) return;
 
     if (k->extended) {
@@ -375,10 +381,10 @@ static void files_key(void* st, window_t* w, de_key_event_t* k) {
         case 'g': case 'G':
             action_forge(s);
             break;
-        case 27:   /* escape */
+        case 27:
             s->selected = -1;
             break;
-        case 'u': case 'U':   /* "up" shortcut: parent dir */
+        case 'u': case 'U':
             if (kstrcmp(s->cwd, "/") != 0) {
                 kstrcpy(s->cwd, "/");
                 s->selected = -1;
@@ -398,7 +404,6 @@ static void files_click(void* st, window_t* w, int mx, int my) {
     files_state_t* s = (files_state_t*)st;
     if (!s) return;
 
-    /* If a modal is up, a click dismisses it (or hits the confirm). */
     if (s->modal != MODAL_NONE) {
         if (s->modal == MODAL_CONFIRM_DELETE) {
             end_modal(s);
@@ -414,8 +419,7 @@ static void files_click(void* st, window_t* w, int mx, int my) {
     int ch = w->height - DE_TITLEBAR_H - 8;
     if (mx < cx || mx >= cx + cw || my < cy || my >= cy + ch) return;
 
-    /* Click on the first row ("..") goes up. */
-    int row = (my - cy - 4 + s->scroll_y) / FILES_ROW_H;
+    int row = (my - cy - 20 + s->scroll_y) / FILES_ROW_H;
     if (row < 0 || row >= s->count) return;
     s->selected = row;
 
@@ -434,7 +438,13 @@ static void files_click(void* st, window_t* w, int mx, int my) {
 static void files_scroll(void* st, window_t* w, int dy) {
     (void)w;
     files_state_t* s = (files_state_t*)st;
-    if (!s || s->modal != MODAL_NONE) return;
+    if (!s) return;
+    if (s->modal == MODAL_FORGE_OUTPUT) {
+        s->forge_output_scroll -= dy;
+        if (s->forge_output_scroll < 0) s->forge_output_scroll = 0;
+        return;
+    }
+    if (s->modal != MODAL_NONE) return;
     s->scroll_y -= dy * 24;
     if (s->scroll_y < 0) s->scroll_y = 0;
 }
@@ -444,8 +454,8 @@ static void files_scroll(void* st, window_t* w, int dy) {
 /* --------------------------------------------------------------------------- */
 static void draw_modal(files_state_t* s, window_t* w) {
     const de_theme_t* t = g_theme;
-    int mw = 320;
-    int mh = 90;
+    int mw = s->modal == MODAL_FORGE_OUTPUT ? 440 : 320;
+    int mh = s->modal == MODAL_FORGE_OUTPUT ? 220 : 90;
     int mx = w->x + (w->width  - mw) / 2;
     int my = w->y + (w->height - mh) / 2;
 
@@ -454,6 +464,56 @@ static void draw_modal(files_state_t* s, window_t* w) {
     de_border(mx, my, mw, mh, t->widget_edge);
 
     de_text(mx + 12, my + 12, s->prompt, t->widget_txt);
+
+    if (s->modal == MODAL_FORGE_OUTPUT) {
+        int bx = mx + 12;
+        int by = my + 36;
+        int bw = mw - 24;
+        int row_h = 14;
+        int visible = (mh - 70) / row_h;
+        int total_lines = 0;
+        for (int i = 0; i < s->forge_output_len; i++)
+            if (s->forge_output[i] == '\n') total_lines++;
+        if (s->forge_output_len > 0 &&
+            s->forge_output[s->forge_output_len - 1] != '\n') total_lines++;
+        if (total_lines == 0) total_lines = 1;
+
+        int max_scroll = total_lines - visible;
+        if (max_scroll < 0) max_scroll = 0;
+        if (s->forge_output_scroll > max_scroll)
+            s->forge_output_scroll = max_scroll;
+        int first_line = total_lines - visible - s->forge_output_scroll;
+        if (first_line < 0) first_line = 0;
+
+        de_fill(bx, by, bw, visible * row_h, t->app_bg);
+        de_border(bx, by, bw, visible * row_h, t->win_border);
+        if (s->forge_output_len == 0) {
+            de_text(bx + 6, by + 5, "(no output)", t->txt_dim);
+        } else {
+            int line_index = 0;
+            int line_start = 0;
+            int row = 0;
+            for (int i = 0; i <= s->forge_output_len; i++) {
+                if (i < s->forge_output_len && s->forge_output[i] != '\n')
+                    continue;
+                if (line_index >= first_line && row < visible) {
+                    char line[FORGE_OUTPUT_LINE];
+                    int len = i - line_start;
+                    if (len >= (int)sizeof(line)) len = sizeof(line) - 1;
+                    kmemcpy(line, s->forge_output + line_start, len);
+                    line[len] = '\0';
+                    de_text_clipped(bx + 6, by + 3 + row * row_h,
+                                    line, bw - 12, t->app_fg);
+                    row++;
+                }
+                line_index++;
+                line_start = i + 1;
+            }
+        }
+        de_text(mx + 12, my + mh - 22,
+                "Up/Down = scroll    Enter/Esc = close", t->txt_dim);
+        return;
+    }
 
     if (s->modal == MODAL_MESSAGE) {
         de_text(mx + 12, my + 40, "(press any key)", t->txt_dim);
@@ -473,12 +533,16 @@ static void draw_modal(files_state_t* s, window_t* w) {
     de_fill(bx, by, bw, bh, t->app_bg);
     de_border(bx, by, bw, bh, t->win_border);
 
-    de_text(bx + 4, by + (bh - 8) / 2, s->input, t->app_fg);
+    int text_y = by + (bh - de_font_body.ascent) / 2;
+    de_text(bx + 4, text_y, s->input, t->app_fg);
 
-    uint32_t blink = (timer_get_ticks() / 25) & 1;
-    if (blink) {
-        int cx = bx + 4 + s->input_len * 8;
-        de_fill(cx, by + (bh - 8) / 2, 2, 8, t->accent);
+    /* Blinking caret. Shifted down and shortened to nest with the text. */
+    if (((timer_get_ticks() / 25) & 1) != 0) {
+        int caret_x = bx + 4 + de_text_width(s->input);
+        int top = text_y + de_font_body.ascent + 2;
+        int h   = de_font_body.ascent - 2;
+        if (h < 6) h = 6;
+        de_fill(caret_x, top, 2, h, t->accent);
     }
 
     de_text(mx + 12, my + 66, "Enter = OK, Esc = Cancel", t->txt_dim);
@@ -488,7 +552,6 @@ static void files_draw(void* st, window_t* w) {
     files_state_t* s = (files_state_t*)st;
     if (!s) return;
 
-    /* Auto-refresh once per second, but never while a modal is up. */
     static uint32_t last_refresh = 0;
     uint32_t now = timer_get_ticks();
     if (s->modal == MODAL_NONE && now - last_refresh > 100) {
@@ -514,7 +577,7 @@ static void files_draw(void* st, window_t* w) {
     const char* c = s->cwd;
     while (*c && p < 62) path[p++] = *c++;
     path[p] = '\0';
-    de_text(cx + 4, cy + 4, path, t->txt_dark);
+    de_text(cx + 4, cy + 3, path, t->txt_dark);
 
     /* List area */
     int list_y = cy + 16;
@@ -527,7 +590,6 @@ static void files_draw(void* st, window_t* w) {
     int max_scroll = total_h - view_h;
     if (max_scroll < 0) max_scroll = 0;
 
-    /* Auto-scroll to keep selection visible */
     int sel_top = s->selected * FILES_ROW_H;
     int sel_bot = sel_top + FILES_ROW_H;
     if (sel_top < s->scroll_y) s->scroll_y = sel_top;
@@ -535,6 +597,9 @@ static void files_draw(void* st, window_t* w) {
         s->scroll_y = sel_bot - view_h;
     if (s->scroll_y < 0) s->scroll_y = 0;
     if (s->scroll_y > max_scroll) s->scroll_y = max_scroll;
+
+    int row_text_y_off = (FILES_ROW_H - de_font_body.line_h) / 2
+                       - de_font_body.ascent;
 
     for (int i = 0; i < s->count; i++) {
         int ry = list_y + 4 + i * FILES_ROW_H - s->scroll_y;
@@ -548,9 +613,9 @@ static void files_draw(void* st, window_t* w) {
         uint32_t fg = selected ? t->panel_sel_txt : t->app_fg;
         uint32_t dim = selected ? t->panel_sel_txt : t->txt_dim;
 
-        /* Type indicator */
-        de_text(cx + 8, ry + 5, s->entries[i].is_dir ? "[D]" : "   ", dim);
-        de_text(cx + 32, ry + 5, s->entries[i].name, fg);
+        de_text(cx + 8,  ry + row_text_y_off,
+                s->entries[i].is_dir ? "[D]" : "   ", dim);
+        de_text(cx + 32, ry + row_text_y_off, s->entries[i].name, fg);
 
         /* Size on the right */
         if (!s->entries[i].is_dir) {
@@ -561,8 +626,8 @@ static void files_draw(void* st, window_t* w) {
             while (v > 0) { tmp[m++] = '0' + v % 10; v /= 10; }
             while (m > 0) num[n++] = tmp[--m];
             num[n] = '\0';
-            int tw = n * 8;
-            de_text(cx + cw - tw - 18, ry + 5, num, dim);
+            int tw = de_text_width(num);
+            de_text(cx + cw - tw - 18, ry + row_text_y_off, num, dim);
         }
     }
 
@@ -587,9 +652,8 @@ static void files_draw(void* st, window_t* w) {
             "N=new  F=folder  R=rename  D=delete  E=edit  G=forge  U=up",
             t->txt_dark);
 
-    /* Modal overlay (draw last, on top of everything) */
+    /* Modal overlay */
     if (s->modal != MODAL_NONE) {
-        /* Slight dim */
         de_fill(cx + 1, cy + 1, cw - 2, ch - 2, 0x80000000);
         draw_modal(s, w);
     }
@@ -600,6 +664,7 @@ const app_t app_files = {
     .id = "files",
     .name = "Files",
     .icon_char = "F",
+    .icon_image = &img_files_icon,
     .default_w = 480,
     .default_h = 340,
     .on_open = files_open,

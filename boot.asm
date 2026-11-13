@@ -70,10 +70,13 @@ _start:
     jmp .hang
 
 ; ---------------------------------------------------------------------------
-; Stack (16 KB, in .bss so it is zero-initialized and not in the image)
+; Kernel stack (64 KB), in its own section so the linker can place it
+; AFTER all other .bss data. This prevents the stack from colliding with
+; large .bss arrays (like the backbuffer fallback) and with the heap,
+; which starts at __kernel_end.
 ; ---------------------------------------------------------------------------
-section .bss
+section .bss.stack nobits alloc write
 align 16
 stack_bottom:
-    resb 16384
+    resb 65536
 stack_top:

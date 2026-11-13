@@ -4,6 +4,8 @@
  * ============================================================================= */
 
 #include <quark/de_apps.h>
+#include <quark/de_sprites.h>
+#include <quark/de_font.h>
 
 #define ED_MAX     4096
 #define ED_LINE    128
@@ -20,6 +22,8 @@ typedef struct {
 
 static void ed_load(editor_state_t* s);
 static void ed_save(editor_state_t* s);
+
+extern uint32_t timer_get_ticks(void);
 
 /* Preload hook for Files. */
 char g_editor_preload_name[32];
@@ -110,28 +114,43 @@ static void ed_draw(void* st, window_t* w) {
     if (total < 0) total = 0;
     if (total > ED_MAX) total = ED_MAX;
 
+    if (s->len == 0) {
+        const char* placeholder = "Start typing...";
+        de_text(cx + 8, cy + 8, placeholder, t->txt_dim);
+    }
+
     int line = 0;
     int i = 0;
     int row = 0;
     int cursor_x = cx + 4;
     int cursor_y = cy + 3;
 
+    /* Number of pixels from the top of a LINE_H-tall row to the
+     * ascender top of the font, so text is visually centered. */
+    int row_text_y_off = (LINE_H - de_font_body.ascent) / 2;
+
     while (i <= total && row <= max_rows + 1) {
         if (line >= s->scroll) {
             int y = cy + 3 + row * LINE_H;
             if (y + LINE_H > cy + content_h) break;
 
+            /* Render the line character by character, advancing by the
+             * real glyph width so proportional font advances line up. */
             int x = cx + 4;
             int col = 0;
+            char buf[2] = { 0, 0 };
             while (i + col < total && s->buf[i + col] != '\n' &&
                    col < ED_LINE) {
-                char ch_str[2] = { s->buf[i + col], 0 };
-                de_text(x + col * 8, y, ch_str, t->app_fg);
+                if (line == cur_line && s->cursor == i + col)
+                    cursor_x = x;
+                buf[0] = s->buf[i + col];
+                de_text(x, y + row_text_y_off, buf, t->app_fg);
+                x += de_text_width(buf);
                 col++;
             }
             if (line == cur_line) {
-                cursor_x = x + col * 8;
-                cursor_y = y;
+                if (s->cursor >= i + col) cursor_x = x;
+                cursor_y = y + row_text_y_off;
             }
             row++;
         }
@@ -144,9 +163,14 @@ static void ed_draw(void* st, window_t* w) {
         line++;
     }
 
-    /* Blinking cursor */
-    uint32_t blink = (timer_get_ticks() / 25) & 1;
-    if (blink) de_fill(cursor_x, cursor_y, 2, 8, t->accent);
+    /* Blinking cursor. Shifted down and shortened so it nests with
+     * lowercase text rather than floating above it. */
+    if (((timer_get_ticks() / 25) & 1) != 0) {
+        int top = cursor_y + de_font_body.ascent + 2;
+        int h   = de_font_body.ascent - 2;
+        if (h < 6) h = 6;
+        de_fill(cursor_x, top, 2, h, t->accent);
+    }
 
     /* Status bar */
     int sb_y = cy + ch - 14;
@@ -194,7 +218,6 @@ static void ed_backspace(editor_state_t* s) {
 }
 
 static void ed_save(editor_state_t* s) {
-    /* Make sure the file exists in RamFS before writing. */
     if (!ramfs_get(s->filename, "/")) {
         ramfs_create(s->filename, "/", 0);
     }
@@ -295,6 +318,7 @@ const app_t app_editor = {
     .id = "editor",
     .name = "Text Editor",
     .icon_char = "E",
+    .icon_image = &img_editor_icon,
     .default_w = 500,
     .default_h = 340,
     .on_open = ed_open,

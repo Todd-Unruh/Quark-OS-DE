@@ -1,4 +1,5 @@
 #include <quark/de.h>
+#include <quark/de_font.h>
 
 extern uint32_t fb_width;
 extern uint32_t fb_height;
@@ -18,10 +19,9 @@ int de_clip_get_w(void);
 int de_clip_get_h(void);
 int de_clip_is_active(void);
 
-int de_panel_y(void)       { return (int)bb_h - DE_PANEL_H; }
 int de_fb_w(void)          { return (int)bb_w; }
 int de_fb_h(void)          { return (int)bb_h; }
-int de_screen_bottom(void) { return de_panel_y(); }
+int de_screen_bottom(void) { return de_fb_h() - DE_DOCK_H; }
 
 #define STATIC_BB_PIXELS (1024 * 768)
 static uint32_t static_backbuffer[STATIC_BB_PIXELS];
@@ -92,7 +92,7 @@ static int clip_rect(int x, int y, int w, int h,
 }
 
 void de_fill(int x, int y, int w, int h, uint32_t color) {
-    if (!bb) return;
+    if (!bb || w <= 0 || h <= 0) return;
     int x0, y0, x1, y1;
     if (!clip_rect(x, y, w, h, &x0, &y0, &x1, &y1)) return;
     for (int yy = y0; yy < y1; yy++) {
@@ -101,22 +101,102 @@ void de_fill(int x, int y, int w, int h, uint32_t color) {
     }
 }
 
-void de_fill_rounded(int x, int y, int w, int h, int r, uint32_t color) {
+void de_fill_alpha(int x, int y, int w, int h, uint32_t color, uint8_t a) {
+    if (!bb || w <= 0 || h <= 0) return;
+    if (a == 0) return;
+    if (a == 255) { de_fill(x, y, w, h, color); return; }
+    int x0, y0, x1, y1;
+    if (!clip_rect(x, y, w, h, &x0, &y0, &x1, &y1)) return;
+    for (int yy = y0; yy < y1; yy++) {
+        uint32_t* row = bb + (uint32_t)yy * bb_w;
+        for (int xx = x0; xx < x1; xx++)
+            row[xx] = de_blend(row[xx], color, a);
+    }
+}
+
+/* Approximate sqrt for AA corner coverage. Newton iterations, converges in
+ * ~5 steps to ~1% error for values we care about (0..1000). */
+static float fast_sqrt(float x) {
+    if (x <= 0.0f) return 0.0f;
+    float g = x * 0.5f + 0.5f;
+    for (int i = 0; i < 5; i++) g = 0.5f * (g + x / g);
+    return g;
+}
+
+/* Correct rounded-rect decomposition:
+ *
+ *   +---------------------+
+ *   | TL  |  top strip | TR|
+ *   +-----+------------+--+
+ *   |     |            |  |
+ *   | left|   center   |rt|
+ *   |     |            |  |
+ *   +-----+------------+--+
+ *   | BL  |  bot strip | BR|
+ *   +---------------------+
+ *
+ * Strips are drawn fully opaque. Only TL/TR/BL/BR get per-pixel coverage.
+ * This avoids the "square bite" artifact at strip/corner boundaries. */
+void de_fill_rounded_alpha(int x, int y, int w, int h, int r,
+                           uint32_t color, uint8_t a) {
+    if (w <= 0 || h <= 0 || a == 0) return;
     if (r > w / 2) r = w / 2;
     if (r > h / 2) r = h / 2;
-    de_fill(x + r, y, w - 2 * r, h, color);
-    de_fill(x, y + r, w, h - 2 * r, color);
+    if (r <= 0) { de_fill_alpha(x, y, w, h, color, a); return; }
+
+    /* Center. */
+    de_fill_alpha(x + r, y + r, w - 2 * r, h - 2 * r, color, a);
+
+    /* Strips. */
+    de_fill_alpha(x + r,     y,         w - 2 * r, r,         color, a);
+    de_fill_alpha(x + r,     y + h - r, w - 2 * r, r,         color, a);
+    de_fill_alpha(x,         y + r,     r,         h - 2 * r, color, a);
+    de_fill_alpha(x + w - r, y + r,     r,         h - 2 * r, color, a);
+
+    /* Corner arcs. */
+    float fr = (float)r;
     for (int cy = 0; cy < r; cy++) {
         for (int cx = 0; cx < r; cx++) {
-            int dx = r - 1 - cx, dy = r - 1 - cy;
-            if (dx * dx + dy * dy <= r * r) {
-                de_fill(x + cx, y + cy, 1, 1, color);
-                de_fill(x + w - 1 - cx, y + cy, 1, 1, color);
-                de_fill(x + cx, y + h - 1 - cy, 1, 1, color);
-                de_fill(x + w - 1 - cx, y + h - 1 - cy, 1, 1, color);
-            }
+            float dx = (float)cx - fr + 0.5f;
+            float dy = (float)cy - fr + 0.5f;
+            float d  = fast_sqrt(dx * dx + dy * dy);
+            float cov = fr + 0.5f - d;
+            if (cov <= 0.0f) continue;
+            if (cov > 1.0f) cov = 1.0f;
+            uint8_t ca = (uint8_t)(cov * (float)a);
+            if (ca == 0) continue;
+            de_fill_alpha(x + cx,         y + cy,         1, 1, color, ca);
+            de_fill_alpha(x + w - 1 - cx, y + cy,         1, 1, color, ca);
+            de_fill_alpha(x + cx,         y + h - 1 - cy, 1, 1, color, ca);
+            de_fill_alpha(x + w - 1 - cx, y + h - 1 - cy, 1, 1, color, ca);
         }
     }
+}
+
+void de_fill_rounded(int x, int y, int w, int h, int r, uint32_t color) {
+    de_fill_rounded_alpha(x, y, w, h, r, color, 255);
+}
+
+void de_fill_circle_alpha(int cx, int cy, int r, uint32_t color, uint8_t a) {
+    if (r <= 0) return;
+    float fr = (float)r;
+    for (int dy = -r; dy <= r; dy++) {
+        for (int dx = -r; dx <= r; dx++) {
+            float ddx = (float)dx;
+            float ddy = (float)dy;
+            float d   = fast_sqrt(ddx * ddx + ddy * ddy);
+            float cov = fr + 0.5f - d;
+            if (cov <= 0.0f) continue;
+            if (cov > 1.0f) cov = 1.0f;
+            uint8_t ca = (uint8_t)(cov * (float)a);
+            if (ca == 0) continue;
+            de_fill_alpha(cx + dx, cy + dy, 1, 1, color, ca);
+        }
+    }
+}
+
+void de_fill_circle(int cx, int cy, int r, uint32_t color) {
+    de_fill_circle_alpha(cx, cy, r, color, 255);
 }
 
 void de_vgradient(int x, int y, int w, int h, uint32_t top, uint32_t bot) {
@@ -140,6 +220,36 @@ void de_border(int x, int y, int w, int h, uint32_t c) {
     de_vline(x + w - 1, y, h, c);
 }
 
+void de_border_rounded(int x, int y, int w, int h, int r, uint32_t c) {
+    if (w <= 0 || h <= 0) return;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    if (r <= 0) { de_border(x, y, w, h, c); return; }
+
+    /* Straight edges. */
+    de_hline(x + r, y,         w - 2 * r, c);
+    de_hline(x + r, y + h - 1, w - 2 * r, c);
+    de_vline(x,         y + r, h - 2 * r, c);
+    de_vline(x + w - 1, y + r, h - 2 * r, c);
+
+    /* Corner arcs: trace the ring at radius (r - 1). */
+    float fr   = (float)r;
+    float ring = fr - 1.0f;
+    for (int cy = 0; cy < r; cy++) {
+        for (int cx = 0; cx < r; cx++) {
+            float dx = (float)cx - fr + 0.5f;
+            float dy = (float)cy - fr + 0.5f;
+            float d  = fast_sqrt(dx * dx + dy * dy);
+            if (d > ring + 0.5f) continue;
+            if (d < ring - 0.5f) continue;
+            de_fill(x + cx,         y + cy,         1, 1, c);
+            de_fill(x + w - 1 - cx, y + cy,         1, 1, c);
+            de_fill(x + cx,         y + h - 1 - cy, 1, 1, c);
+            de_fill(x + w - 1 - cx, y + h - 1 - cy, 1, 1, c);
+        }
+    }
+}
+
 void de_line(int x0, int y0, int x1, int y1, uint32_t color) {
     int dx = x1 - x0; if (dx < 0) dx = -dx;
     int dy = y1 - y0; if (dy < 0) dy = -dy;
@@ -155,147 +265,157 @@ void de_line(int x0, int y0, int x1, int y1, uint32_t color) {
     }
 }
 
-/* ---- Font --------------------------------------------------------------- */
-static const uint8_t font8x8[95][8] = {
-    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
-    {0x18,0x18,0x18,0x18,0x18,0x00,0x18,0x00},
-    {0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00},
-    {0x66,0xFF,0x66,0x66,0x66,0xFF,0x66,0x00},
-    {0x18,0x3E,0x60,0x3C,0x06,0x7C,0x18,0x00},
-    {0x62,0x66,0x0C,0x18,0x30,0x66,0x46,0x00},
-    {0x3C,0x66,0x3C,0x38,0x67,0x66,0x3F,0x00},
-    {0x06,0x0C,0x18,0x00,0x00,0x00,0x00,0x00},
-    {0x0C,0x18,0x30,0x30,0x30,0x18,0x0C,0x00},
-    {0x30,0x18,0x0C,0x0C,0x0C,0x18,0x30,0x00},
-    {0x00,0x66,0x3C,0xFF,0x3C,0x66,0x00,0x00},
-    {0x00,0x18,0x18,0x7E,0x18,0x18,0x00,0x00},
-    {0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x30},
-    {0x00,0x00,0x00,0x7E,0x00,0x00,0x00,0x00},
-    {0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x00},
-    {0x02,0x06,0x0C,0x18,0x30,0x60,0x40,0x00},
-    {0x3C,0x66,0x6E,0x7A,0x72,0x66,0x3C,0x00},
-    {0x18,0x38,0x18,0x18,0x18,0x18,0x7E,0x00},
-    {0x3C,0x66,0x06,0x0C,0x18,0x30,0x7E,0x00},
-    {0x3C,0x66,0x06,0x1C,0x06,0x66,0x3C,0x00},
-    {0x0C,0x1C,0x2C,0x4C,0x7E,0x0C,0x0C,0x00},
-    {0x7E,0x60,0x7C,0x06,0x06,0x66,0x3C,0x00},
-    {0x1C,0x30,0x60,0x7C,0x66,0x66,0x3C,0x00},
-    {0x7E,0x66,0x0C,0x18,0x18,0x18,0x18,0x00},
-    {0x3C,0x66,0x66,0x3C,0x66,0x66,0x3C,0x00},
-    {0x3C,0x66,0x66,0x3E,0x06,0x0C,0x38,0x00},
-    {0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x00},
-    {0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x30},
-    {0x0C,0x18,0x30,0x60,0x30,0x18,0x0C,0x00},
-    {0x00,0x00,0x7E,0x00,0x7E,0x00,0x00,0x00},
-    {0x30,0x18,0x0C,0x06,0x0C,0x18,0x30,0x00},
-    {0x3C,0x66,0x06,0x0C,0x18,0x00,0x18,0x00},
-    {0x3C,0x66,0x6E,0x6A,0x6E,0x60,0x3C,0x00},
-    {0x18,0x3C,0x66,0x66,0x7E,0x66,0x66,0x00},
-    {0x7C,0x66,0x66,0x7C,0x66,0x66,0x7C,0x00},
-    {0x3C,0x66,0x60,0x60,0x60,0x66,0x3C,0x00},
-    {0x78,0x6C,0x66,0x66,0x66,0x6C,0x78,0x00},
-    {0x7E,0x60,0x60,0x7C,0x60,0x60,0x7E,0x00},
-    {0x7E,0x60,0x60,0x7C,0x60,0x60,0x60,0x00},
-    {0x3C,0x66,0x60,0x6E,0x66,0x66,0x3C,0x00},
-    {0x66,0x66,0x66,0x7E,0x66,0x66,0x66,0x00},
-    {0x3C,0x18,0x18,0x18,0x18,0x18,0x3C,0x00},
-    {0x1E,0x0C,0x0C,0x0C,0x0C,0x6C,0x38,0x00},
-    {0x66,0x6C,0x78,0x70,0x78,0x6C,0x66,0x00},
-    {0x60,0x60,0x60,0x60,0x60,0x60,0x7E,0x00},
-    {0x63,0x77,0x7F,0x6B,0x63,0x63,0x63,0x00},
-    {0x66,0x76,0x7E,0x7E,0x6E,0x66,0x66,0x00},
-    {0x3C,0x66,0x66,0x66,0x66,0x66,0x3C,0x00},
-    {0x7C,0x66,0x66,0x7C,0x60,0x60,0x60,0x00},
-    {0x3C,0x66,0x66,0x66,0x66,0x3C,0x0E,0x00},
-    {0x7C,0x66,0x66,0x7C,0x78,0x6C,0x66,0x00},
-    {0x3C,0x66,0x60,0x3C,0x06,0x66,0x3C,0x00},
-    {0x7E,0x18,0x18,0x18,0x18,0x18,0x18,0x00},
-    {0x66,0x66,0x66,0x66,0x66,0x66,0x3C,0x00},
-    {0x66,0x66,0x66,0x66,0x66,0x3C,0x18,0x00},
-    {0x63,0x63,0x63,0x6B,0x7F,0x77,0x63,0x00},
-    {0x66,0x66,0x3C,0x18,0x3C,0x66,0x66,0x00},
-    {0x66,0x66,0x66,0x3C,0x18,0x18,0x18,0x00},
-    {0x7E,0x06,0x0C,0x18,0x30,0x60,0x7E,0x00},
-    {0x3C,0x30,0x30,0x30,0x30,0x30,0x3C,0x00},
-    {0x40,0x60,0x30,0x18,0x0C,0x06,0x02,0x00},
-    {0x3C,0x0C,0x0C,0x0C,0x0C,0x0C,0x3C,0x00},
-    {0x18,0x3C,0x66,0x00,0x00,0x00,0x00,0x00},
-    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF},
-    {0x30,0x18,0x0C,0x00,0x00,0x00,0x00,0x00},
-    {0x00,0x00,0x3C,0x06,0x3E,0x66,0x3E,0x00},
-    {0x60,0x60,0x7C,0x66,0x66,0x66,0x7C,0x00},
-    {0x00,0x00,0x3C,0x66,0x60,0x66,0x3C,0x00},
-    {0x06,0x06,0x3E,0x66,0x66,0x66,0x3E,0x00},
-    {0x00,0x00,0x3C,0x66,0x7E,0x60,0x3C,0x00},
-    {0x1C,0x30,0x30,0x7C,0x30,0x30,0x30,0x00},
-    {0x00,0x00,0x3E,0x66,0x66,0x3E,0x06,0x3C},
-    {0x60,0x60,0x7C,0x66,0x66,0x66,0x66,0x00},
-    {0x18,0x00,0x38,0x18,0x18,0x18,0x3C,0x00},
-    {0x0C,0x00,0x1C,0x0C,0x0C,0x0C,0x6C,0x38},
-    {0x60,0x60,0x66,0x6C,0x78,0x6C,0x66,0x00},
-    {0x38,0x18,0x18,0x18,0x18,0x18,0x3C,0x00},
-    {0x00,0x00,0x66,0x7F,0x7F,0x6B,0x63,0x00},
-    {0x00,0x00,0x7C,0x66,0x66,0x66,0x66,0x00},
-    {0x00,0x00,0x3C,0x66,0x66,0x66,0x3C,0x00},
-    {0x00,0x00,0x7C,0x66,0x66,0x7C,0x60,0x60},
-    {0x00,0x00,0x3E,0x66,0x66,0x3E,0x06,0x06},
-    {0x00,0x00,0x6C,0x76,0x60,0x60,0x60,0x00},
-    {0x00,0x00,0x3E,0x60,0x3C,0x06,0x7C,0x00},
-    {0x30,0x30,0x7C,0x30,0x30,0x36,0x1C,0x00},
-    {0x00,0x00,0x66,0x66,0x66,0x66,0x3E,0x00},
-    {0x00,0x00,0x66,0x66,0x66,0x3C,0x18,0x00},
-    {0x00,0x00,0x63,0x6B,0x7F,0x3E,0x36,0x00},
-    {0x00,0x00,0x66,0x3C,0x18,0x3C,0x66,0x00},
-    {0x00,0x00,0x66,0x66,0x66,0x3E,0x06,0x3C},
-    {0x00,0x00,0x7E,0x0C,0x18,0x30,0x7E,0x00},
-    {0x0E,0x18,0x18,0x70,0x18,0x18,0x0E,0x00},
-    {0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x00},
-    {0x70,0x18,0x18,0x0E,0x18,0x18,0x70,0x00},
-    {0x00,0x00,0x00,0x7E,0x00,0x00,0x00,0x00},
-};
+/* ===========================================================================
+ * Soft drop shadow (layered rings, ~16 levels)
+ * =========================================================================== */
+void de_shadow_rect(int x, int y, int w, int h, int radius,
+                    int blur, uint32_t color, uint8_t alpha) {
+    if (blur <= 0 || alpha == 0 || w <= 0 || h <= 0) return;
 
-static void draw_char(int x, int y, char c, uint32_t color) {
-    if (c < 32 || c > 126 || !bb) return;
-    const uint8_t* g = font8x8[(int)c - 32];
-    for (int yy = 0; yy < 8; yy++) {
-        int py = y + yy;
-        if (py < 0 || py >= (int)bb_h) continue;
-        uint32_t* row = bb + (uint32_t)py * bb_w;
-        uint8_t bits = g[yy];
-        for (int xx = 0; xx < 8; xx++) {
-            if (!(bits & (0x80 >> xx))) continue;
-            int px = x + xx;
-            if (px < 0 || px >= (int)bb_w) continue;
-            row[px] = color;
+    for (int i = 1; i <= blur; i++) {
+        uint32_t a = ((uint32_t)alpha * (blur - i + 1)) / blur;
+        if (a == 0) continue;
+
+        int bx = x - i;
+        int by = y - i + (i / 3);
+        int bw = w + 2 * i;
+        int bh = h + 2 * i - (i / 3);
+        int rr = radius + i;
+
+        /* Straight strips. */
+        de_fill_alpha(bx + rr, by,          bw - 2 * rr, 1, color, (uint8_t)a);
+        de_fill_alpha(bx + rr, by + bh - 1, bw - 2 * rr, 1, color, (uint8_t)a);
+        de_fill_alpha(bx,      by + rr,     1, bh - 2 * rr, color, (uint8_t)a);
+        de_fill_alpha(bx + bw - 1, by + rr, 1, bh - 2 * rr, color, (uint8_t)a);
+
+        /* Corner arcs. */
+        float fr   = (float)rr;
+        float ring = fr - 1.0f;
+        for (int cy = 0; cy < rr; cy++) {
+            for (int cx = 0; cx < rr; cx++) {
+                float dx = (float)cx - fr + 0.5f;
+                float dy = (float)cy - fr + 0.5f;
+                float d  = fast_sqrt(dx * dx + dy * dy);
+                if (d > ring + 0.5f) continue;
+                if (d < ring - 0.5f) continue;
+                de_fill_alpha(bx + cx,             by + cy,             1, 1, color, (uint8_t)a);
+                de_fill_alpha(bx + bw - 1 - cx,    by + cy,             1, 1, color, (uint8_t)a);
+                de_fill_alpha(bx + cx,             by + bh - 1 - cy,    1, 1, color, (uint8_t)a);
+                de_fill_alpha(bx + bw - 1 - cx,    by + bh - 1 - cy,    1, 1, color, (uint8_t)a);
+            }
         }
     }
 }
 
+/* ===========================================================================
+ * Box blur (two-pass, horizontal then vertical) for vibrancy.
+ * =========================================================================== */
+void de_blur_region(int x, int y, int w, int h, int radius) {
+    if (!bb || w <= 0 || h <= 0 || radius <= 0) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > (int)bb_w) w = (int)bb_w - x;
+    if (y + h > (int)bb_h) h = (int)bb_h - y;
+    if (w <= 0 || h <= 0) return;
+
+    uint32_t scratch_pixels[256 * 128];
+    uint32_t* scratch = scratch_pixels;
+    int heap = 0;
+    if (w * h > 256 * 128) {
+        scratch = (uint32_t*)kmalloc((uint32_t)w * h * sizeof(uint32_t));
+        if (!scratch) return;
+        heap = 1;
+    }
+
+    for (int yy = 0; yy < h; yy++)
+        kmemcpy(scratch + yy * w, bb + (uint32_t)(y + yy) * bb_w + x,
+                (size_t)w * sizeof(uint32_t));
+
+    /* Horizontal pass. */
+    for (int yy = 0; yy < h; yy++) {
+        uint32_t* row = scratch + yy * w;
+        for (int xx = 0; xx < w; xx++) {
+            uint32_t sr = 0, sg = 0, sb = 0;
+            int n = 0;
+            int lo = xx - radius; if (lo < 0) lo = 0;
+            int hi = xx + radius; if (hi >= w) hi = w - 1;
+            for (int k = lo; k <= hi; k++) {
+                uint32_t c = row[k];
+                sr += (c >> 16) & 0xFF;
+                sg += (c >>  8) & 0xFF;
+                sb +=  c        & 0xFF;
+                n++;
+            }
+            row[xx] = ((sr / n) << 16) | ((sg / n) << 8) | (sb / n);
+        }
+    }
+
+    /* Vertical pass. */
+    for (int yy = 0; yy < h; yy++) {
+        int lo = yy - radius; if (lo < 0) lo = 0;
+        int hi = yy + radius; if (hi >= h) hi = h - 1;
+        for (int xx = 0; xx < w; xx++) {
+            uint32_t sr = 0, sg = 0, sb = 0;
+            int n = 0;
+            for (int k = lo; k <= hi; k++) {
+                uint32_t c = scratch[k * w + xx];
+                sr += (c >> 16) & 0xFF;
+                sg += (c >>  8) & 0xFF;
+                sb +=  c        & 0xFF;
+                n++;
+            }
+            bb[(uint32_t)(y + yy) * bb_w + (x + xx)] =
+                ((sr / n) << 16) | ((sg / n) << 8) | (sb / n);
+        }
+    }
+
+    if (heap) kfree(scratch);
+}
+
+/* ===========================================================================
+ * Text — delegates to the baked font
+ * =========================================================================== */
+
 int de_text_width(const char* s) {
-    int n = 0;
-    while (s[n] && n < 400) n++;
-    return n * 8;
+    return de_font_text_width(&de_font_body, s);
 }
 
 void de_text(int x, int y, const char* s, uint32_t color) {
-    while (*s) { draw_char(x, y, *s, color); x += 8; s++; }
+    /* Callers pass y as the top of the ascender box. Fonts draw from the
+     * baseline, so shift down by the ascent. */
+    de_font_draw_text(&de_font_body, x, y + de_font_body.ascent, s,
+                      color, 255);
 }
 
 void de_text_clipped(int x, int y, const char* s, int max_w, uint32_t color) {
-    int chars = max_w / 8;
-    if (chars <= 0) return;
+    if (max_w <= 0) return;
+    /* Find how many characters fit in max_w (leaving room for ".."). */
+    int total = 0;
+    while (s[total]) total++;
+    int n = total;
+    while (n > 0 && de_font_text_width_n(&de_font_body, s, n) > max_w - 12) n--;
+    if (n >= total) {
+        de_text(x, y, s, color);
+        return;
+    }
+    if (n < 3) return;
     char buf[128];
-    int i = 0;
-    while (s[i] && i < chars && i < 127) { buf[i] = s[i]; i++; }
-    if (s[i] && i >= 2) { buf[i - 2] = '.'; buf[i - 1] = '.'; }
+    int i;
+    for (i = 0; i < n - 2 && i < 126; i++) buf[i] = s[i];
+    buf[i++] = '.';
+    buf[i++] = '.';
     buf[i] = '\0';
     de_text(x, y, buf, color);
 }
 
 void de_text_centered(int cx, int y, const char* s, uint32_t color) {
-    de_text(cx - de_text_width(s) / 2, y, s, color);
+    int w = de_text_width(s);
+    de_text(cx - w / 2, y, s, color);
 }
 
+/* ===========================================================================
+ * Cursor
+ * =========================================================================== */
 static const uint8_t cur_fill[16] = {
     0b10000000, 0b11000000, 0b11100000, 0b11110000,
     0b11111000, 0b11111100, 0b11111110, 0b11111111,
@@ -322,12 +442,14 @@ void de_cursor_draw(void) {
             int px = mx + x;
             if (px < 0 || px >= (int)bb_w) continue;
             if (!(outline & (0x80 >> x))) continue;
-            /* Draw cursor regardless of clip: it lives on top. */
             row[px] = (fill & (0x80 >> x)) ? 0x00000000 : 0x00FFFFFF;
         }
     }
 }
 
+/* ===========================================================================
+ * Blit
+ * =========================================================================== */
 void de_blit_to_screen(void) {
     if (!bb || !framebuffer_pixels) return;
     uint32_t pitch_px = fb_pitch_get() / 4;

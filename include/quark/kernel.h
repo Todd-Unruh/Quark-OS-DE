@@ -26,12 +26,22 @@ typedef uint32_t           uintptr_t;
 #define TRUE    1
 #define FALSE   0
 
+
 /* --------------------------------------------------------------------------
- * Kernel memory layout (virtual addresses)
+ * Kernel memory layout (physical addresses)
+ *
+ * With baked sprites, the kernel image now extends past 14 MB. The heap
+ * must sit clear of the kernel image AND clear of the framebuffer.
+ *
+ *   0x00100000 - ~0x00E70000   kernel .text/.rodata/.data/.bss/stack
+ *   0x02000000 - 0x04000000    kernel heap (32 MB)
+ *   0x04000000 - ...           free for PMM
+ *
+ * If the kernel image ever grows past 32 MB, bump KERNEL_HEAP_START.
  * -------------------------------------------------------------------------- */
 #define KERNEL_VIRT_BASE    0x00100000
-#define KERNEL_HEAP_START   0x00800000
-#define KERNEL_HEAP_END     0x01000000
+#define KERNEL_HEAP_START   0x02000000
+#define KERNEL_HEAP_END     0x04000000
 #define USER_SPACE_START    0x08000000
 #define PAGE_SIZE           4096
 #define PAGE_ALIGN(x)       (((x) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
@@ -185,6 +195,7 @@ typedef struct {
 void terminal_init(void);
 void terminal_clear(void);
 void terminal_refresh(void);
+void terminal_set_sink(void (*sink)(char c));
 void terminal_setcolor(uint8_t fg, uint8_t bg);
 void terminal_putchar(char c);
 void terminal_write(const char *str);
@@ -211,20 +222,25 @@ void pic_mask(uint8_t irq);
 void pic_unmask(uint8_t irq);
 
 /* timer.c */
+#define TIMER_HZ 100
 void     timer_init(uint32_t hz);
 uint32_t timer_get_ticks(void);
+uint32_t timer_get_idle_ticks(void);
+void     timer_idle_wait(void);
 void     timer_sleep(uint32_t ms);
 
 /* keyboard.c */
 void keyboard_init(void);
 char keyboard_getchar(void);
 int  keyboard_has_input(void);
+void keyboard_flush_input(void);
 
 /* pmm.c */
 void     pmm_init(uint32_t mem_kb);
 uint32_t pmm_alloc_page(void);
 void     pmm_free_page(uint32_t addr);
 uint32_t pmm_free_pages(void);
+void     pmm_get_stats(uint32_t *total_pages, uint32_t *free_pages);
 
 /* heap.c */
 void  heap_init(void);
@@ -293,7 +309,7 @@ static inline void outl(uint16_t port, uint32_t val) {
 static inline void io_wait(void) { outb(0x80, 0); }
 static inline void sti(void)  { __asm__ volatile ("sti"); }
 static inline void cli(void)  { __asm__ volatile ("cli"); }
-static inline void hlt(void)  { __asm__ volatile ("hlt"); }
+static inline void hlt(void)  { timer_idle_wait(); }
 
 /* --------------------------------------------------------------------------
  * RamFS
@@ -322,6 +338,7 @@ int  ramfs_match(const char *pattern, const char *name);
 int  ramfs_count_in_dir(const char *current_dir);
 uint32_t ramfs_dir_size(const char *current_dir);
 int  ramfs_used_count(void);
+uint32_t ramfs_total_bytes(void);
 int  ramfs_copy(const char *name, const char *dest_name, const char *current_dir);
 int  ramfs_rename(const char *old_name, const char *new_name, const char *current_dir);
 void ramfs_find(const char *dir, const char *pattern);
@@ -340,9 +357,9 @@ void ramfs_tree(const char *dir);
 typedef struct {
     uint64_t addr;
     uint16_t length;
-    uint8_t  csum;
+    uint16_t csum;
     uint8_t  status;
-    uint16_t errors;
+    uint8_t  errors;
     uint16_t special;
 } __attribute__((packed)) e1000_rx_desc_t;
 
@@ -357,8 +374,13 @@ typedef struct {
 } __attribute__((packed)) e1000_tx_desc_t;
 
 void pci_init(void);
-void e1000_init(uint32_t bar0, uint32_t mem_base);
-void e1000_send_packet(const void *data, uint16_t length);
+void e1000_init(uint32_t bar0);
+int e1000_send_packet(const void *data, uint16_t length);
+void net_poll(void);
+void net_dhcp_start(void);
+int net_get_ipv4_config(uint8_t address[4], uint8_t subnet_mask[4],
+                        uint8_t gateway[4], uint8_t dns_server[4]);
+int net_dns_lookup(const char *hostname, uint8_t address[4]);
 void net_list_status(void);
 
 /* --------------------------------------------------------------------------

@@ -56,22 +56,6 @@ static void pmm_reserve_range(uint32_t addr, uint32_t size) {
     }
 }
 
-/* Free every page in [addr, addr+size). */
-static void pmm_free_range(uint32_t addr, uint32_t size) {
-    if (size == 0) return;
-
-    uint32_t start = addr / PAGE_SIZE;
-    uint32_t end   = (addr + size + PAGE_SIZE - 1) / PAGE_SIZE;
-    if (end > pmm_total_pages) end = pmm_total_pages;
-
-    for (uint32_t p = start; p < end; p++) {
-        if (pmm_test_bit(p)) {
-            pmm_clear_bit(p);
-            pmm_free_count++;
-        }
-    }
-}
-
 /* -------------------------------------------------------------------------- */
 void pmm_init(uint32_t mem_kb) {
     /* 1. Compute total pages and bitmap size. */
@@ -166,4 +150,9 @@ void pmm_free_page(uint32_t addr) {
 
 uint32_t pmm_free_pages(void) {
     return pmm_free_count;
+}
+
+void pmm_get_stats(uint32_t *total_pages, uint32_t *free_pages) {
+    if (total_pages) *total_pages = pmm_total_pages;
+    if (free_pages) *free_pages = pmm_free_count;
 }

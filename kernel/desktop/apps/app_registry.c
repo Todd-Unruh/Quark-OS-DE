@@ -4,12 +4,14 @@ extern const app_t app_editor;
 extern const app_t app_calculator;
 extern const app_t app_files;
 extern const app_t app_about;
+extern const app_t app_monitor;
 
 static const app_t* g_apps[] = {
     &app_editor,
     &app_calculator,
     &app_files,
     &app_about,
+    &app_monitor,
 };
 
 #define APP_COUNT ((int)(sizeof(g_apps)/sizeof(g_apps[0])))
@@ -20,6 +22,22 @@ const app_t* app_registry_at(int i) {
 }
 
 int app_registry_count(void) { return APP_COUNT; }
+
+const app_t* app_registry_dock_at(int index) {
+    if (index < 0) return NULL;
+    for (int i = 0; i < APP_COUNT; i++) {
+        if (g_apps[i]->hide_from_dock) continue;
+        if (index-- == 0) return g_apps[i];
+    }
+    return NULL;
+}
+
+int app_registry_dock_count(void) {
+    int count = 0;
+    for (int i = 0; i < APP_COUNT; i++)
+        if (!g_apps[i]->hide_from_dock) count++;
+    return count;
+}
 
 const app_t* app_registry_find(const char* id) {
     for (int i = 0; i < APP_COUNT; i++) {

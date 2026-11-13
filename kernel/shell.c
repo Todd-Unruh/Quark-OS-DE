@@ -21,7 +21,7 @@ shell_context_t *shell_ctx(void) {
 
 void shell_init_context(void) {
     kmemset(&g_shell_ctx, 0, sizeof(g_shell_ctx));
-    kstrcpy(g_shell_ctx.cwd, "root");
+    kstrcpy(g_shell_ctx.cwd, "/");
     shell_env_set("USER", "root");
     shell_env_set("HOME", "/");
     shell_env_set("SHELL", "/bin/bash");
@@ -251,7 +251,7 @@ static void print_prompt(void) {
     kprintf(":");
     terminal_setcolor(VGA_LIGHT_BLUE, VGA_BLACK);
 
-    if (kstrcmp(g_shell_ctx.cwd, "root") == 0) {
+    if (kstrcmp(g_shell_ctx.cwd, "/") == 0) {
         kprintf("~");
     } else {
         kprintf("~/%s", g_shell_ctx.cwd);

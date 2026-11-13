@@ -4,6 +4,8 @@
  * ============================================================================= */
 
 #include <quark/de_apps.h>
+#include <quark/de_sprites.h>
+#include <quark/de_font.h>
 
 #define CALC_BTN_W 52
 #define CALC_BTN_H 32
@@ -82,7 +84,6 @@ static void* calc_open(void) {
 
 static void calc_close(void* st) { if (st) kfree(st); }
 
-/* Flat, 24-element array. Indexed as button_labels[r * CALC_COLS + c]. */
 static const char* button_labels[CALC_ROWS * CALC_COLS] = {
     "C", "+/-", "%", "/",
     "7", "8", "9", "*",
@@ -115,24 +116,26 @@ static void calc_draw(void* st, window_t* w) {
     de_border(dx, dy, dw, dh, t->win_border);
 
     int tw = de_text_width(s->display);
-    de_text(dx + dw - tw - 8, dy + (dh - 8) / 2, s->display, t->app_fg);
+    int disp_y = dy + (dh - de_font_body.ascent) / 2;
+    de_text(dx + dw - tw - 8, disp_y, s->display, t->app_fg);
 
     /* Buttons */
+    int btn_text_y_off = (CALC_BTN_H - de_font_body.ascent) / 2;
     for (int r = 0; r < CALC_ROWS; r++) {
         for (int c = 0; c < CALC_COLS; c++) {
             const char* lbl = button_labels[r * CALC_COLS + c];
             if (!lbl || !lbl[0]) continue;
 
             if (r == 4 && c == 0) {
-                /* "0" button spans two columns */
                 int bx, by;
                 calc_btn_rect(w, r, c, &bx, &by);
                 int bw = CALC_BTN_W * 2 + CALC_PAD;
                 de_fill_rounded(bx, by, bw, CALC_BTN_H, 4, t->panel_btn);
                 de_border(bx, by, bw, CALC_BTN_H, t->panel_edge);
-                de_text_centered(bx + bw / 2 - 4, by + (CALC_BTN_H - 8) / 2,
-                                 lbl, t->panel_txt);
-                c++;   /* skip next column */
+                int lw = de_text_width(lbl);
+                de_text(bx + (bw - lw) / 2, by + btn_text_y_off,
+                        lbl, t->panel_txt);
+                c++;
                 continue;
             }
 
@@ -147,10 +150,10 @@ static void calc_draw(void* st, window_t* w) {
 
             de_fill_rounded(bx, by, CALC_BTN_W, CALC_BTN_H, 4, bg);
             de_border(bx, by, CALC_BTN_W, CALC_BTN_H, t->panel_edge);
-            de_text_centered(bx + CALC_BTN_W / 2 - 4,
-                             by + (CALC_BTN_H - 8) / 2,
-                             lbl,
-                             (bg == t->accent) ? 0x00FFFFFF : t->panel_txt);
+            int lw = de_text_width(lbl);
+            de_text(bx + (CALC_BTN_W - lw) / 2, by + btn_text_y_off,
+                    lbl,
+                    (bg == t->accent) ? 0x00FFFFFF : t->panel_txt);
         }
     }
 }
@@ -203,6 +206,7 @@ const app_t app_calculator = {
     .id = "calc",
     .name = "Calculator",
     .icon_char = "C",
+    .icon_image = &img_calculator_icon,
     .default_w = 260,
     .default_h = 340,
     .on_open = calc_open,
